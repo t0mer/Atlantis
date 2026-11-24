@@ -96,3 +96,18 @@ func TestRawReturnsDecryptedResult(t *testing.T) {
 		t.Fatalf("Raw: %v %s", err, raw)
 	}
 }
+
+func TestRawRedactsSecrets(t *testing.T) {
+	f := newFake(t)
+	c, _ := New(f.Plain.URL, "secret", Options{})
+	raw, err := c.Raw(context.Background(), "wireless", "wlan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "must-not-leak") {
+		t.Fatalf("Raw leaked a Wi-Fi password: %s", raw)
+	}
+	if !strings.Contains(string(raw), "[redacted]") {
+		t.Fatalf("expected a redaction marker: %s", raw)
+	}
+}
