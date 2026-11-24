@@ -109,10 +109,14 @@ func aesDecrypt(km keyMaterial, data []byte) ([]byte, error) {
 	return pkcs7Unpad(out, aes.BlockSize)
 }
 
+// maxRSABits bounds device-supplied moduli so a hostile device cannot force
+// very slow RSA operations.
+const maxRSABits = 4096
+
 // parseRSAPublicKey builds a key from hex modulus and exponent.
 func parseRSAPublicKey(nHex, eHex string) (*rsa.PublicKey, error) {
 	n, ok := new(big.Int).SetString(nHex, 16)
-	if !ok || n.Sign() <= 0 {
+	if !ok || n.Sign() <= 0 || n.BitLen() > maxRSABits {
 		return nil, errors.New("luci: invalid RSA modulus")
 	}
 	e, ok := new(big.Int).SetString(eHex, 16)

@@ -125,3 +125,35 @@ func TestPinMismatchIsRejected(t *testing.T) {
 		t.Fatalf("err = %v, want ErrCertChanged", err)
 	}
 }
+
+func TestSetPasswordClearsAuthFailure(t *testing.T) {
+	f := newFake(t)
+	f.Update(func(f *fakedeco.Fake) { f.SetWrongPassword(true) })
+	c, _ := New(f.Plain.URL, "wrong", Options{})
+	ctx := context.Background()
+	if err := c.Login(ctx); !errors.Is(err, deco.ErrWrongPassword) {
+		t.Fatalf("err = %v, want ErrWrongPassword", err)
+	}
+	f.Update(func(f *fakedeco.Fake) { f.SetWrongPassword(false) })
+	if err := c.SetPassword("secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Login(ctx); err != nil {
+		t.Fatalf("login after SetPassword: %v", err)
+	}
+}
+
+func TestStokScrubbedFromURLErrors(t *testing.T) {
+	msg := `Post "http://h/cgi-bin/luci/;stok=abc123/admin/device?form=x": context canceled`
+	got := stokInURLRE.ReplaceAllString(msg, ";stok=[redacted]")
+	if strings.Contains(got, "abc123") {
+		t.Fatalf("stok still present: %s", got)
+	}
+}
+
+func TestOversizedModulusRejected(t *testing.T) {
+	huge := strings.Repeat("ff", 1024) // 8192-bit modulus
+	if _, err := parseRSAPublicKey(huge, "010001"); err == nil {
+		t.Fatal("expected oversized modulus to be rejected")
+	}
+}

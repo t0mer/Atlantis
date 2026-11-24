@@ -28,6 +28,8 @@ const formContentType = "application/x-www-form-urlencoded"
 
 var (
 	errSessionDead = errors.New("luci: session expired and re-login did not help")
+	stokRE         = regexp.MustCompile(`^[A-Za-z0-9]{1,128}$`)
+	stokInURLRE    = regexp.MustCompile(`;stok=[^/?\s"]+`)
 	errTimeout     = errors.New("luci: device timed out")
 	sysauthRE      = regexp.MustCompile(`sysauth=[a-f0-9]+`)
 )
@@ -54,6 +56,7 @@ type Options struct {
 // on the same stok poorly.
 type Client struct {
 	mu    sync.Mutex
+	pinMu sync.Mutex
 	base  *url.URL
 	pw    string
 	h     string // md5("admin"+password), used in the sign string
@@ -131,15 +134,18 @@ func (c *Client) verifyPeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 	}
 	sum := sha256.Sum256(rawCerts[0])
 	fp := hex.EncodeToString(sum[:])
-	if c.pin == "" {
+	c.pinMu.Lock()
+	first := c.pin == ""
+	if first {
 		c.pin = fp
-		if c.opts.OnFingerprint != nil {
-			c.opts.OnFingerprint(fp)
-		}
-		return nil
 	}
-	if fp != c.pin {
+	match := fp == c.pin
+	c.pinMu.Unlock()
+	if !match {
 		return deco.ErrCertChanged
+	}
+	if first && c.opts.OnFingerprint != nil {
+		c.opts.OnFingerprint(fp)
 	}
 	return nil
 }
@@ -165,7 +171,8 @@ func (c *Client) send(ctx context.Context, path, contentType, body, cookie strin
 		}
 		resp, err := c.httpc.Do(req)
 		if err != nil {
-			return nil, err
+			// The URL carries the session token; keep it out of error text.
+			return nil, redactedError{msg: stokInURLRE.ReplaceAllString(err.Error(), ";stok=[redacted]"), err: err}
 		}
 		b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
@@ -383,8 +390,8 @@ func (c *Client) loginLocked(ctx context.Context) error {
 	var res struct {
 		Stok string `json:"stok"`
 	}
-	if err := json.Unmarshal(env.Result, &res); err != nil || res.Stok == "" {
-		return errors.New("luci: login response missing stok")
+	if err := json.Unmarshal(env.Result, &res); err != nil || !stokRE.MatchString(res.Stok) {
+		return errors.New("luci: login response missing or malformed stok")
 	}
 	cookie := sysauthHeader(resp.header)
 	if cookie == "" {
@@ -467,6 +474,30 @@ func (c *Client) call(ctx context.Context, area, form, op string, params any) (j
 	}
 	return nil, errSessionDead
 }
+
+// SetPassword replaces the management password and clears a previous
+// ErrWrongPassword, so polling can resume. Call it after the user fixes credentials.
+func (c *Client) SetPassword(password string) error {
+	if password == "" {
+		return errors.New("luci: password is required")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pw = password
+	c.h = credentialHash(password)
+	c.authFailed = false
+	c.clearLocked()
+	return nil
+}
+
+// redactedError is an error whose text has been scrubbed but which still unwraps to the original.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e redactedError) Error() string { return e.msg }
+func (e redactedError) Unwrap() error { return e.err }
 
 // Login establishes a session. It is a no-op when already logged in.
 func (c *Client) Login(ctx context.Context) error {
