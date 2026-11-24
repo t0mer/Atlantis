@@ -117,6 +117,25 @@ func (f *Fake) TLSFingerprint() string {
 func defaultResults() map[string]any {
 	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 	return map[string]any{
+		"client/client_list": map[string]any{
+			"client_list": []any{
+				map[string]any{"mac": "11-22-33-44-55-66", "ip": "192.168.68.20", "name": b64("מכשיר"),
+					"online": true, "wire_type": "wireless", "connection_type": "5G", "interface": "main",
+					"up_speed": 1200, "down_speed": 56000},
+				map[string]any{"mac": "11-22-33-44-55-77", "ip": "192.168.68.21", "name": "<Error Decoding Laptop>",
+					"online": false, "wire_type": "wired", "connection_type": "lan", "interface": "main",
+					"up_speed": 0, "down_speed": 0},
+			},
+		},
+		"network/wan_ipv4": map[string]any{
+			"wan": map[string]any{"ip_info": map[string]any{"mac": "AA-BB-CC-DD-EE-02", "ip": "203.0.113.7", "gateway": "203.0.113.1", "mask": "255.255.255.0", "dns1": "1.1.1.1", "dns2": "8.8.8.8"}, "dial_type": "dhcp"},
+			"lan": map[string]any{"ip_info": map[string]any{"mac": "AA-BB-CC-DD-EE-01", "ip": "192.168.68.1", "mask": "255.255.255.0"}},
+		},
+		"network/performance": map[string]any{"cpu_usage": 0.12, "mem_usage": 0.48},
+		"wireless/wlan": map[string]any{
+			"band2_4": map[string]any{"host": map[string]any{"enable": true, "ssid": b64("הבית"), "password": "must-not-leak"}},
+			"band5_1": map[string]any{"host": map[string]any{"enable": true, "ssid": b64("הבית-5G")}, "guest": map[string]any{"enable": false, "ssid": b64("guest")}},
+		},
 		"device/device_list": map[string]any{
 			"device_list": []any{
 				map[string]any{
