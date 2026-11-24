@@ -18,6 +18,7 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: false,
 	}
+	root.AddCommand(newProbeCmd())
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the build version",
