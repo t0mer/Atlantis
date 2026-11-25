@@ -207,13 +207,32 @@ export interface Snapshot {
   slow_at?: string;
 }
 
+export type SettingSource = "ui" | "config";
+
 export interface Settings {
   deco: { transport: string; host: string; port: number; email: string };
-  poll: { fast: string; slow: string; offline_after_misses: number; source: "ui" | "config" };
-  store: { raw_retention: string; rollup_retention: string };
-  metrics: { enabled: boolean; path: string; per_client: string };
-  notify: { quiet_hours: string; timezone: string; events: EventType[] };
+  poll: { fast: string; slow: string; offline_after_misses: number; source: SettingSource };
+  history: { raw_retention: string; rollup_retention: string; source: SettingSource };
+  metrics: { enabled: boolean; path: string; per_client: "all" | "watched" | "none"; token_set: boolean; source: SettingSource };
+  notifications: { quiet_hours: string; timezone: string; events: EventType[]; source: SettingSource };
+  openwa: { url: string; default_chat: string; api_key_set: boolean; source: SettingSource };
+  access: { base_url: string; source: SettingSource };
+  logging: { level: "debug" | "info" | "warn" | "error"; source: SettingSource };
+  debug: { enabled: boolean; source: SettingSource };
+  startup: { listen: string; data_path: string; key_source: string; log_format: string };
   version: string;
+}
+
+/** A PUT /settings body: any sections. Omitted secrets are kept; "" clears them. */
+export interface SettingsPatch {
+  poll?: { fast: string; slow: string; offline_after_misses: number };
+  history?: { raw_retention: string; rollup_retention: string };
+  metrics?: { enabled: boolean; path: string; per_client: string; token?: string };
+  notifications?: { quiet_hours: string; timezone: string };
+  openwa?: { url: string; default_chat: string; api_key?: string };
+  access?: { base_url: string };
+  logging?: { level: string };
+  debug?: { enabled: boolean };
 }
 
 export interface AuthStatus {

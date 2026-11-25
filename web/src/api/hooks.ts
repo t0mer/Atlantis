@@ -14,6 +14,7 @@ import type {
   Point,
   SessionStatus,
   Settings,
+  SettingsPatch,
   Wireless,
   WirelessPatch,
 } from "./types";
@@ -127,10 +128,11 @@ export function useDecoMutations() {
   };
 }
 
-export function useSetPoll() {
+/** Saves any settings sections; the response is the settings now in effect. */
+export function useSaveSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (poll: { fast: string; slow: string; offline_after_misses: number }) => api<Settings>("/api/v1/settings", { method: "PUT", body: { poll } }),
+    mutationFn: (patch: SettingsPatch) => api<Settings>("/api/v1/settings", { method: "PUT", body: patch }),
     onSuccess: (s) => qc.setQueryData(["settings"], s),
   });
 }

@@ -7,12 +7,13 @@ import {
   useDecoMutations,
   useSession,
   useSessionActions,
-  useSetPoll,
+  useSaveSettings,
   useSettings,
   type ChannelInput,
 } from "../api/hooks";
 import type { Channel, EventType, Settings as SettingsData } from "../api/types";
 import { DecoForm } from "../components/DecoForm";
+import { AdvancedPanel, HistoryPanel, MetricsPanel, NotificationsPanel, OpenWAPanel } from "../components/SettingsPanels";
 import {
   Button,
   Confirm,
@@ -341,7 +342,7 @@ const short = (d: string) => d.replace(/(\d)m0s$/, "$1m").replace(/(\d)h0m$/, "$
 const withCurrent = (choices: string[], cur: string) => (choices.includes(cur) ? choices : [cur, ...choices]);
 
 function RefreshPanel({ s }: { s: SettingsData }) {
-  const set = useSetPoll();
+  const set = useSaveSettings();
   const toast = useToast();
   const [fast, setFast] = useState(short(s.poll.fast));
   const [slow, setSlow] = useState(short(s.poll.slow));
@@ -387,7 +388,7 @@ function RefreshPanel({ s }: { s: SettingsData }) {
         <Button
           tone="primary"
           disabled={!changed || set.isPending}
-          onClick={() => set.mutate({ fast, slow, offline_after_misses: misses }, { onSuccess: () => toast("Refresh times saved") })}
+          onClick={() => set.mutate({ poll: { fast, slow, offline_after_misses: misses } }, { onSuccess: () => toast("Refresh times saved") })}
         >
           Save
         </Button>
@@ -398,35 +399,26 @@ function RefreshPanel({ s }: { s: SettingsData }) {
 
 export function Settings() {
   const { data: s, error } = useSettings();
-  const rows: [string, string][] = s
-    ? [
-        ["Keep raw samples", goDuration(s.store.raw_retention)],
-        ["Keep hourly history", goDuration(s.store.rollup_retention)],
-        ["Prometheus metrics", s.metrics.enabled ? `${s.metrics.path} (per-device: ${s.metrics.per_client})` : "off"],
-        ["Quiet hours", s.notify.quiet_hours ? `${s.notify.quiet_hours} (${s.notify.timezone})` : "none"],
-        ["Version", s.version],
-      ]
-    : [];
+  // Panels remount when the saved values change, so their fields follow.
+  const k = (o: object) => JSON.stringify(o);
   return (
     <>
       <PageTitle>Settings</PageTitle>
       <div className="space-y-6">
+        <ErrorNote error={error} />
         <DecoPanel />
         <SessionPanel />
         {s && <RefreshPanel key={`${s.poll.fast}-${s.poll.slow}-${s.poll.offline_after_misses}`} s={s} />}
-        <ChannelsPanel allEvents={s?.notify.events ?? []} />
-        <Panel title="Configuration">
-          <ErrorNote error={error} />
-          <dl className="text-sm">
-            {rows.map(([k, v]) => (
-              <div key={k} className="flex justify-between gap-4 border-t border-line py-2 first:border-t-0">
-                <dt className="text-drift">{k}</dt>
-                <dd className="tnum text-right break-all">{v}</dd>
-              </div>
-            ))}
-          </dl>
-          <p className="mt-3 text-xs text-drift">Change these in atlantis.yaml or the ATLANTIS_* environment variables, then restart Atlantis.</p>
-        </Panel>
+        <ChannelsPanel allEvents={s?.notifications.events ?? []} />
+        {s && (
+          <>
+            <NotificationsPanel key={k(s.notifications)} s={s} />
+            <OpenWAPanel key={k(s.openwa)} s={s} />
+            <HistoryPanel key={k(s.history)} s={s} />
+            <MetricsPanel key={k(s.metrics)} s={s} />
+            <AdvancedPanel key={k([s.access, s.logging, s.debug])} s={s} />
+          </>
+        )}
       </div>
     </>
   );
