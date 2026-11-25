@@ -194,8 +194,8 @@ func TestSetNetworkRefusesUnverifiedWrites(t *testing.T) {
 	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
 	c := newClient(t, d)
 	for _, p := range []deco.WirelessPatch{
-		{Network: "iot", Enable: ptr(true)},
-		{Network: "iot", SSID: ptr("x-iot")},
+		{Network: "iot", Encryption: ptr("wpa2")},
+		{Network: "iot", Hidden: ptr(true)},
 		{Network: "host", Hidden: ptr(true)},
 		{Network: "host", SSID: ptr("ok"), Encryption: ptr("wpa3")},
 		{Network: "guest", Encryption: ptr("wpa2+wpa"), Password: ptr("guest-pass-1")}, // value not proven
@@ -208,7 +208,7 @@ func TestSetNetworkRefusesUnverifiedWrites(t *testing.T) {
 	if d.Request(tmp.OpWirelessSet) != nil {
 		t.Fatal("an unverified write was sent")
 	}
-	if ed := c.Editable(); len(ed["host"]) != 2 || len(ed["iot"]) != 0 {
+	if ed := c.Editable(); len(ed["host"]) != 2 || len(ed["iot"]) != 3 {
 		t.Fatalf("editable %v", ed)
 	}
 }

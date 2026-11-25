@@ -38,7 +38,7 @@ It is a single Go binary with the web UI built in. It runs on a Raspberry Pi, a 
 - **Names that stay yours.** Give a device a name, tags and a "watch" flag. These are stored in Atlantis; the Deco is not changed.
 - **Decos.** Model, firmware (with a notice when an update is available), IP and MAC, role, backhaul, and the devices connected to each one.
 - **Connect from the browser.** Atlantis starts without a Deco. Add the main Deco's address and your TP-Link ID on the first page, and change or remove it later in Settings. Atlantis signs in to check the details before it saves them.
-- **Wi-Fi.** Every band and network with its name, security and state. Turn the guest network on or off, and change its name, password and security. Change the main network's name and password on all bands, after typing `CHANGE` to confirm. Only changes that have been tested on a real Deco are offered (see [Wi-Fi changes](#wi-fi-changes)).
+- **Wi-Fi.** Every band and network with its name, security and state. Turn the guest and IoT networks on or off and change their name and password (and the guest network's security). Change the main network's name and password on all bands, after typing `CHANGE` to confirm. Only changes that have been tested on a real Deco are offered (see [Wi-Fi changes](#wi-fi-changes)).
 - **Refresh times you set.** Choose how often devices and the mesh are checked in Settings; the change applies at once.
 - **Events.** A timeline of devices joining, coming and going, Decos going offline, internet outages, public IP changes and firmware updates.
 - **Notifications** through [Shoutrrr](https://containrrr.dev/shoutrrr/) (Telegram, Discord, Slack, ntfy, email and more) or WhatsApp through [OpenWA](https://github.com/open-wa/wa-automate-nodejs). Each channel picks which events it sends and can be limited to watched devices. Messages use templates, and there are quiet hours.
@@ -286,7 +286,8 @@ Atlantis only offers a Wi-Fi change after it has been tested on a real Deco: the
 |---|---|
 | Main | Name and password, on every band |
 | Guest | On or off; name, password and security (open or WPA2) |
-| IoT, Multi-link | Shown, not changed yet |
+| IoT | On or off; name and password |
+| Multi-link | Shown, not changed yet |
 
 Each change keeps the network's other settings as the Deco reports them, is read back to confirm, and disconnects the devices on that network until they join again. The main network cannot be turned off. Everything else answers "not available yet". Developers can test more with `atlantis ssh wifi-probe` (see [Command line](#command-line)).
 

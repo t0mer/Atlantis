@@ -24,6 +24,7 @@ import (
 var verifiedWrites = map[string][]string{
 	"host":  {deco.FieldSSID, deco.FieldPassword},
 	"guest": {deco.FieldEnable, deco.FieldSSID, deco.FieldPassword, deco.FieldEncryption},
+	"iot":   {deco.FieldEnable, deco.FieldSSID, deco.FieldPassword},
 }
 
 // verifiedEncryption are the security values proven per network; a field
