@@ -38,6 +38,14 @@ type Client struct {
 	mu   sync.Mutex
 	sess *tmp.Session
 	neg  json.RawMessage
+	logf func(string, ...any)
+}
+
+// SetDebug sends relay status lines (codes only, no secrets) to logf.
+func (c *Client) SetDebug(logf func(string, ...any)) {
+	c.mu.Lock()
+	c.logf = logf
+	c.mu.Unlock()
 }
 
 // New returns a client for site. account must already be logged in.
@@ -57,7 +65,7 @@ func (c *Client) Login(ctx context.Context) error {
 		c.sess.Close()
 		c.sess = nil
 	}
-	conn, err := ata.Dial(ctx, c.account, c.site.AppServerURL, c.site.MasterDeviceID)
+	conn, err := ata.Dial(ctx, c.account, c.site.AppServerURL, c.site.MasterDeviceID, c.logf)
 	if err != nil {
 		return err
 	}

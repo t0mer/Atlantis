@@ -50,13 +50,37 @@ var errCodes = map[int]string{
 // ErrClosed is returned after Close or a fatal relay error.
 var ErrClosed = errors.New("ata: connection closed")
 
+// RelayError is a non-success inner err_code.
+type RelayError struct{ Code int }
+
+func (e RelayError) Error() string {
+	msg := errCodes[e.Code]
+	if msg == "" {
+		msg = "relay error"
+	}
+	return fmt.Sprintf("%s (err_code %d)", msg, e.Code)
+}
+
+const (
+	codeNotConnected = 4
+	// The app rebuilds the client with a new token and retries once on a
+	// connect failure; we allow a few attempts with a pause, since the
+	// device may need a moment to join the tunnel.
+	connectAttempts = 3
+)
+
+// connectBackoff is the pause before the second connect attempt (doubled
+// for the third). A variable so tests can shorten it.
+var connectBackoff = 2 * time.Second
+
 // Conn is a TMP byte stream over the relay. Read and Write may be called
 // from different goroutines.
 type Conn struct {
 	relay     Relay
 	serverURL string
 	deviceID  string
-	suffix    int64
+	token     string // account token + suffix, fixed per connection as in the app
+	logf      func(format string, args ...any)
 
 	mu      sync.Mutex
 	cond    *sync.Cond
@@ -79,30 +103,73 @@ type response struct {
 }
 
 // Dial opens a TMP channel to the device and starts the transfer loop.
-func Dial(ctx context.Context, relay Relay, serverURL, deviceID string) (*Conn, error) {
+// After CONNECT it sends one empty TRANSFER to check that the device has
+// joined; if the relay answers "device not connected" it reconnects with a
+// new token, up to connectAttempts times. logf, if non-nil, receives relay
+// status lines (codes only, never tokens or data).
+func Dial(ctx context.Context, relay Relay, serverURL, deviceID string, logf func(string, ...any)) (*Conn, error) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	var last error
+	for attempt := 1; attempt <= connectAttempts; attempt++ {
+		if attempt > 1 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(connectBackoff * time.Duration(attempt-1)):
+			}
+		}
+		c, err := dialOnce(ctx, relay, serverURL, deviceID, logf, attempt)
+		if err == nil {
+			go c.loop()
+			return c, nil
+		}
+		last = err
+		var re RelayError
+		if !errors.As(err, &re) || re.Code != codeNotConnected {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("%w (after %d attempts; is the Deco online and reachable by the app?)", last, connectAttempts)
+}
+
+func dialOnce(ctx context.Context, relay Relay, serverURL, deviceID string, logf func(string, ...any), attempt int) (*Conn, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(16))
 	if err != nil {
 		return nil, err
 	}
 	c := &Conn{
-		relay: relay, serverURL: serverURL, deviceID: deviceID, suffix: n.Int64(),
-		kick: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}),
+		relay: relay, serverURL: serverURL, deviceID: deviceID, logf: logf,
+		token: fmt.Sprintf("%s-%d", relay.Token(), n.Int64()),
+		kick:  make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}),
 	}
 	c.cond = sync.NewCond(&c.mu)
-	if _, err := c.send(ctx, map[string]any{"method": "CONNECT", "type": "TMP"}); err != nil {
+	r, err := c.send(ctx, map[string]any{"method": "CONNECT", "type": "TMP"})
+	if err != nil {
+		logf("relay CONNECT attempt %d: %v", attempt, err)
 		return nil, fmt.Errorf("ata: connect: %w", err)
 	}
-	go c.loop()
+	logf("relay CONNECT attempt %d: err_code %d", attempt, r.ErrCode)
+	time.Sleep(minPoll) // the app's first transfer is at least one poll interval later
+	c.sn = 1
+	r, err = c.send(ctx, map[string]any{"method": "TRANSFER", "sn": c.sn, "raw_data": ""})
+	if err != nil {
+		logf("relay first TRANSFER attempt %d: %v", attempt, err)
+		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		c.send(dctx, map[string]any{"method": "DISCONNECT"}) // free the token suffix
+		cancel()
+		return nil, fmt.Errorf("ata: %w", err)
+	}
+	logf("relay first TRANSFER attempt %d: err_code %d", attempt, r.ErrCode)
+	if data, err := base64.StdEncoding.DecodeString(r.RawData); err == nil && len(data) > 0 {
+		c.in = append(c.in, data...)
+	}
 	return c, nil
 }
 
-// token is the relay token: the account token plus a per-connection suffix
-// (ata/context/j.java). The account token is read on every request so a
-// cloud re-login is picked up.
-func (c *Conn) token() string { return fmt.Sprintf("%s-%d", c.relay.Token(), c.suffix) }
-
 func (c *Conn) send(ctx context.Context, req map[string]any) (*response, error) {
-	req["token"] = c.token()
+	req["token"] = c.token
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	raw, err := c.relay.Passthrough(ctx, c.serverURL, c.deviceID, req)
@@ -119,11 +186,7 @@ func (c *Conn) send(ctx context.Context, req map[string]any) (*response, error) 
 		return nil, fmt.Errorf("malformed relay response: %w", err)
 	}
 	if r.ErrCode != 0 && r.ErrCode != 1 {
-		msg := errCodes[r.ErrCode]
-		if msg == "" {
-			msg = "relay error"
-		}
-		return nil, fmt.Errorf("%s (err_code %d)", msg, r.ErrCode)
+		return &r, RelayError{Code: r.ErrCode}
 	}
 	return &r, nil
 }

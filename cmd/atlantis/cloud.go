@@ -23,7 +23,7 @@ import (
 
 type cloudProbeOptions struct {
 	email, site, dumpDir, terminalFile, caFile string
-	dump                                       bool
+	dump, debug                                bool
 
 	// Set by tests only; there are no flags for these.
 	bootstrapURL string
@@ -80,6 +80,7 @@ replaced), as a test fixture.`,
 	f.StringVar(&o.email, "email", "", "TP-Link ID email (or ATLANTIS_CLOUD_EMAIL)")
 	f.StringVar(&o.site, "site", "", "site ID from the list to read; omit to only list sites")
 	f.BoolVar(&o.dump, "dump", false, "write sanitised response fixtures (needs --site)")
+	f.BoolVar(&o.debug, "debug", false, "print cloud relay status codes (never tokens or data)")
 	f.StringVar(&o.dumpDir, "dump-dir", "internal/deco/cloud/testdata", "directory for --dump fixtures")
 	f.StringVar(&o.terminalFile, "terminal-file", "", "where the installation's terminal ID is kept (default: user config dir)")
 	f.StringVar(&o.caFile, "ca-file", "", "extra PEM root certificates for the cloud TLS connection (default: "+caFileName+" in the user config dir, if present)")
@@ -203,6 +204,9 @@ type cloudStep struct {
 // probeSite connects to one site and runs every allowlisted read.
 func probeSite(ctx context.Context, acct *tplinkcloud.Client, site tplinkcloud.Site, o cloudProbeOptions) error {
 	c := cloud.New(acct, site)
+	if o.debug {
+		c.SetDebug(func(f string, a ...any) { fmt.Fprintf(o.errOut, "debug: "+f+"\n", a...) })
+	}
 	if err := c.Login(ctx); err != nil {
 		return fmt.Errorf("connecting to %s through the cloud: %w", site.Name, err)
 	}

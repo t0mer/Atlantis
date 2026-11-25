@@ -24,6 +24,7 @@ type echoRelay struct {
 	errCode   int
 	badSN     bool
 	connected bool
+	notJoined int // answer the first TRANSFER after this many CONNECTs with err_code 4
 }
 
 func (r *echoRelay) Token() string { return "acct" }
@@ -45,7 +46,14 @@ func (r *echoRelay) Passthrough(_ context.Context, url, dev string, req any) (js
 			return nil, errors.New("CONNECT without type TMP")
 		}
 		r.connected = true
+		r.lastSN = 0
 	case "TRANSFER":
+		if r.notJoined > 0 {
+			r.notJoined--
+			r.connected = false
+			b, _ := json.Marshal(map[string]any{"err_code": 4})
+			return b, nil
+		}
 		if !r.connected {
 			return nil, errors.New("TRANSFER before CONNECT")
 		}
@@ -66,7 +74,7 @@ func (r *echoRelay) Passthrough(_ context.Context, url, dev string, req any) (js
 
 func dial(t *testing.T, r *echoRelay) *Conn {
 	t.Helper()
-	c, err := Dial(context.Background(), r, "https://relay.example", "dev-1")
+	c, err := Dial(context.Background(), r, "https://relay.example", "dev-1", t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,5 +178,38 @@ func TestCloseFlushesQueuedBytes(t *testing.T) {
 	}
 	if r.methods[len(r.methods)-1] != "DISCONNECT" {
 		t.Fatalf("lifecycle: %v", r.methods)
+	}
+}
+
+func TestDialRetriesWhenDeviceNotJoined(t *testing.T) {
+	connectBackoff = time.Millisecond
+	r := &echoRelay{notJoined: 2}
+	c := dial(t, r)
+	defer c.Close()
+	c.Write([]byte("ok"))
+	got := make([]byte, 2)
+	if _, err := io.ReadFull(c, got); err != nil || string(got) != "OK" {
+		t.Fatalf("%q %v", got, err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, m := range r.methods {
+		if m == "CONNECT" {
+			n++
+		}
+	}
+	if n != 3 || r.badSN {
+		t.Fatalf("want 3 CONNECTs and ordered sn, got %d (%v)", n, r.methods)
+	}
+}
+
+func TestDialGivesUpAfterAttempts(t *testing.T) {
+	connectBackoff = time.Millisecond
+	r := &echoRelay{notJoined: 99}
+	_, err := Dial(context.Background(), r, "https://relay.example", "dev-1", t.Logf)
+	var re RelayError
+	if !errors.As(err, &re) || re.Code != 4 || !strings.Contains(err.Error(), "3 attempts") {
+		t.Fatalf("got %v", err)
 	}
 }
