@@ -22,7 +22,7 @@ import (
 type sshProbeOptions struct {
 	host, email, hostKey, username, dumpDir, knownHosts string
 	port                                                int
-	rawUsername, noAssociate, shared                    bool
+	rawUsername, associate, shared                      bool
 	dump, debug, skipTDP, acceptNew                     bool
 
 	password    string
@@ -73,7 +73,7 @@ it; trusted keys are kept in ssh_known_hosts in the user config dir.`,
 	f.StringVar(&o.username, "username", "", "SSH username override (default: derived from the email)")
 	f.BoolVar(&o.rawUsername, "raw-username", false, "do not lowercase the email before use")
 	f.BoolVar(&o.skipTDP, "no-tdp", false, "skip TDP discovery")
-	f.BoolVar(&o.noAssociate, "no-associate", false, "skip the TMP version association step")
+	f.BoolVar(&o.associate, "associate", false, "run the TMP version association step first (the app skips it; an M5 works either way)")
 	f.BoolVar(&o.shared, "shared", false, "negotiate as a shared user instead of the owner")
 	f.BoolVar(&o.dump, "dump", false, "write sanitised response fixtures")
 	f.StringVar(&o.dumpDir, "dump-dir", "internal/deco/tmpclient/testdata", "directory for --dump fixtures")
@@ -152,7 +152,7 @@ func runSSHProbe(ctx context.Context, o sshProbeOptions) error {
 		})
 	}
 	c := tmpclient.New(dial, tmp.Options{
-		Username: o.email, Owner: !o.shared, Heartbeat: 3 * time.Second, Associate: !o.noAssociate,
+		Username: o.email, Owner: !o.shared, Heartbeat: 3 * time.Second, Associate: o.associate,
 	})
 	if err := c.Login(ctx); err != nil {
 		if errors.Is(err, sshconn.ErrAuthFailed) {

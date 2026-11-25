@@ -23,7 +23,7 @@ func TestSSHProbeEndToEnd(t *testing.T) {
 	o := sshProbeOptions{
 		host: host, port: port, email: "Owner@Example.com", password: "pw", skipTDP: true,
 		dump: true, dumpDir: filepath.Join(t.TempDir(), "fx"), debug: true,
-		acceptNew: true, knownHosts: filepath.Join(t.TempDir(), "kh"),
+		acceptNew: true, knownHosts: filepath.Join(t.TempDir(), "kh"), associate: true,
 		in: strings.NewReader(""), out: &out, errOut: &errOut,
 	}
 	err = runSSHProbe(context.Background(), o)

@@ -331,7 +331,7 @@ func dumpCloudFixtures(dir string, results map[string]json.RawMessage) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", n, err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "cloud_"+strings.ToLower(n)+".json"), append(clean, '\n'), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "tmp_"+strings.ToLower(n)+".json"), append(clean, '\n'), 0o644); err != nil {
 			return err
 		}
 	}
