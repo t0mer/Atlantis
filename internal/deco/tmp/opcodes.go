@@ -30,6 +30,8 @@ const (
 	OpWANInfoGet               Opcode = 0x407B
 	OpDeviceSignalLevelListGet Opcode = 0x4094
 	OpDeviceResourceInfoGet    Opcode = 0x4317
+	OpIPv4Get                  Opcode = 0x4004
+	OpMLONetworkGet            Opcode = 0x43B0
 )
 
 var opNames = map[Opcode]string{
@@ -39,6 +41,8 @@ var opNames = map[Opcode]string{
 	OpBlockedListGet: "BLOCKED_LIST_GET", OpFWLatestGet: "FW_LATEST_GET", OpWANInfoGet: "WAN_INFO_GET",
 	OpDeviceSignalLevelListGet: "DEVICE_SIGNAL_LEVEL_LIST_GET",
 	OpDeviceResourceInfoGet:    "DEVICE_RESOURCE_INFO_GET",
+	OpIPv4Get:                  "IPV4_GET",
+	OpMLONetworkGet:            "MLO_NETWORK_GET",
 	OpWirelessSet:              "WIRELESS_SET",
 }
 
@@ -58,6 +62,7 @@ var allowed = map[Opcode]bool{
 	OpWirelessGet: true, OpDeviceListGet: true, OpClientListGet: true, OpClientListSpeedGet: true,
 	OpBlockedListGet: true, OpFWLatestGet: true, OpWANInfoGet: true,
 	OpDeviceSignalLevelListGet: true, OpDeviceResourceInfoGet: true,
+	OpIPv4Get: true, OpMLONetworkGet: true,
 	// WIRELESS_SET: host-network SSID/password only (tmpclient.SetHostWiFi),
 	// verified on a Deco M5.
 	OpWirelessSet: true,
