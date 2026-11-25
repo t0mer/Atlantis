@@ -185,3 +185,23 @@ func TestFirstUserAndSessions(t *testing.T) {
 		t.Fatal("expired session accepted")
 	}
 }
+
+// Review finding: merging two batches into one hour keeps CPU/mem averages.
+func TestRollupMergeKeepsLoad(t *testing.T) {
+	s, now := open(t)
+	ctx := context.Background()
+	n, _ := s.EnsureNetwork(ctx, Network{Host: "h", Transport: "ssh"})
+	hour := *now
+	cpu1, cpu2 := 0.2, 0.6
+	s.AddSamples(ctx, n.ID, []NodeSample{{NodeID: "m", Online: true, CPU: &cpu1, Mem: &cpu1}}, nil)
+	*now = hour.Add(9 * 24 * time.Hour)
+	s.Compact(ctx, 7*24*time.Hour, 90*24*time.Hour)
+	*now = hour.Add(10 * time.Minute) // the clock jumps back: a second batch for the same hour
+	s.AddSamples(ctx, n.ID, []NodeSample{{NodeID: "m", Online: true, CPU: &cpu2, Mem: &cpu2}}, nil)
+	*now = hour.Add(9 * 24 * time.Hour)
+	s.Compact(ctx, 7*24*time.Hour, 90*24*time.Hour)
+	pts, _ := s.NodeHistory(ctx, n.ID, "m", hour.Add(-time.Hour))
+	if len(pts) != 1 || pts[0].CPU == nil || *pts[0].CPU < 0.39 || *pts[0].CPU > 0.41 {
+		t.Fatalf("%+v", pts)
+	}
+}

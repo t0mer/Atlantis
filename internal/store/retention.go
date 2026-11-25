@@ -34,6 +34,10 @@ func (s *Store) Compact(ctx context.Context, raw, rollup time.Duration) error {
 		  FROM node_samples WHERE ts < ? GROUP BY network_id, node_id, ts/3600
 		  ON CONFLICT (network_id, node_id, hour) DO UPDATE SET
 		    avg_clients=(node_rollups.avg_clients*node_rollups.samples + excluded.avg_clients*excluded.samples)/(node_rollups.samples+excluded.samples),
+		    avg_cpu=CASE WHEN node_rollups.avg_cpu IS NULL THEN excluded.avg_cpu WHEN excluded.avg_cpu IS NULL THEN node_rollups.avg_cpu
+		      ELSE (node_rollups.avg_cpu*node_rollups.samples + excluded.avg_cpu*excluded.samples)/(node_rollups.samples+excluded.samples) END,
+		    avg_mem=CASE WHEN node_rollups.avg_mem IS NULL THEN excluded.avg_mem WHEN excluded.avg_mem IS NULL THEN node_rollups.avg_mem
+		      ELSE (node_rollups.avg_mem*node_rollups.samples + excluded.avg_mem*excluded.samples)/(node_rollups.samples+excluded.samples) END,
 		    samples=node_rollups.samples+excluded.samples, online_count=node_rollups.online_count+excluded.online_count`, []any{cutoff}},
 		{`DELETE FROM node_samples WHERE ts < ?`, []any{cutoff}},
 		{`DELETE FROM client_rollups WHERE hour < ?`, []any{now.Add(-rollup).Unix()}},
