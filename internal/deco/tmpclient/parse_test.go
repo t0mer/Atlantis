@@ -57,9 +57,10 @@ func TestParseDevicesAcrossFamilies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ds) != 7 {
-		t.Fatalf("want 7 nodes (2 malformed skipped), got %d", len(ds))
+	if len(ds) != 8 {
+		t.Fatalf("want 8 nodes (a non-object skipped, a numeric id kept), got %d", len(ds))
 	}
+	nodeByID(t, ds, "42")
 	m := nodeByID(t, ds, "m1")
 	if !m.Master || m.InternetOnline || m.InternetError != "sim_absent" || m.Nickname != "Living room" || m.Backhaul.Type != "" || m.MAC != "aa:bb:cc:00:00:01" {
 		t.Errorf("CPE master: %+v", m)
@@ -229,5 +230,43 @@ func TestParseClientLiveShape(t *testing.T) {
 	wired, _ := parseClients(json.RawMessage(`{"client_list":[{"mac":"AA-BB-CC-DD-EE-11","wire_type":"wired","linked_device_info":{"connection_type":[]}}]}`), nil, "m1")
 	if !wired[0].Wired {
 		t.Fatal("wire_type wired")
+	}
+}
+
+// Review findings: odd values must not drop an entry, and other edge cases.
+func TestOddValuesKeepEntries(t *testing.T) {
+	ds, _ := parseDevices(json.RawMessage(`{"device_list":[
+	  {"device_id":"a","role":"slave","signal_level":{"band2_4":"n/a"},"group_status":1,"connection_type":["band5",7]},
+	  {"device_id":"b","role":"slave","nickname":"` + b64s("סלון") + `","signal_level":"weird","connection_type":{"x":1}}]}`))
+	if len(ds) != 2 {
+		t.Fatalf("nodes dropped: %+v", ds)
+	}
+	// A numeric link is kept as text and counts as an unknown link type.
+	if ds[0].GroupStatus != "1" || ds[0].Backhaul.Signal["band2_4"] != 0 || ds[0].Backhaul.Type != deco.BackhaulOther || ds[0].Backhaul.Links[1] != "7" {
+		t.Errorf("node a: %+v", ds[0])
+	}
+	if ds[1].Nickname != "סלון" {
+		t.Errorf("non-ASCII room name corrupted: %q", ds[1].Nickname)
+	}
+	cs, _ := parseClients(json.RawMessage(`{"client_list":[
+	  {"mac":"AA-BB-CC-DD-EE-01","online":"unknown","up_speed":"N/A","linked_device_info":"x"},
+	  {"mac":"AA-BB-CC-DD-EE-02","online":true,"down_speed":[1]}]}`), nil, "m")
+	if len(cs) != 2 || cs[0].Online || cs[0].UpBps != 0 || cs[0].NodeID != "m" {
+		t.Fatalf("clients dropped or wrong: %+v", cs)
+	}
+	fw, _ := parseFirmware(json.RawMessage(`{"fw_list":[{"device_model":"M5","device_id_list":"dev-1"}]}`))
+	if len(fw) != 1 || len(fw[0].NodeIDs) != 1 {
+		t.Fatalf("firmware entry with a single id dropped: %+v", fw)
+	}
+	p, err := parsePerformance(json.RawMessage(`{"device_list":[{"cpu_usage":"n/a"},{"cpu_usage":40,"memory_usage":1,"memory_total":4}]}`))
+	if err != nil || p.CPUUsage != 0 && p.CPUUsage != 0.4 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if p, err := parsePerformance(json.RawMessage(`{"device_list":"x","cpu_usage":1}`)); err != nil || p.CPUUsage != 0.01 {
+		t.Fatalf("1%% CPU must stay 1%%: %+v %v", p, err)
+	}
+	w, _ := parseWireless(json.RawMessage(`{"band_steering":{"host":{"ssid":"eA=="}},"band2_4":{"host":{"ssid":"eA=="},"radio":"x"}}`))
+	if _, ok := w.Bands["band_steering"]; ok || w.Bands["band2_4"].Networks["host"].SSID != "x" {
+		t.Fatalf("%+v", w)
 	}
 }

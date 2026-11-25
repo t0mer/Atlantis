@@ -111,6 +111,15 @@ func (c *Client) Logout(context.Context) error {
 // except when the device ended it because of its session limits: then
 // reconnecting would only fight the Deco app for the slot.
 func (c *Client) Request(ctx context.Context, op tmp.Opcode, params any) (json.RawMessage, error) {
+	if tmp.IsWrite(op) {
+		return nil, fmt.Errorf("tmpclient: %s changes the device; use its dedicated method", op)
+	}
+	return c.request(ctx, op, params)
+}
+
+// request sends any allowlisted opcode, including writes. Only the
+// dedicated, validated write methods (SetHostWiFi) call it with a write.
+func (c *Client) request(ctx context.Context, op tmp.Opcode, params any) (json.RawMessage, error) {
 	for attempt := 0; ; attempt++ {
 		if err := c.Login(ctx); err != nil {
 			return nil, err
@@ -243,7 +252,11 @@ func (c *Client) Firmware(ctx context.Context) ([]deco.Firmware, error) {
 // "wan"/"dsl_wan" component (for example in access-point mode) return
 // deco.ErrUnsupported, as the app hides the page for them.
 func (c *Client) WAN(ctx context.Context) (*deco.WANStatus, error) {
-	if !c.hasComponent(ctx, "wan") && !c.hasComponent(ctx, "dsl_wan") {
+	comps, err := c.components(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !comps["wan"] && !comps["dsl_wan"] {
 		return nil, deco.ErrUnsupported
 	}
 	raw, err := c.Request(ctx, tmp.OpIPv4Get, nil)
@@ -265,7 +278,11 @@ func (c *Client) WAN(ctx context.Context) (*deco.WANStatus, error) {
 // (DEVICE_RESOURCE_INFO_GET). As in the app, it is asked only when the
 // Deco negotiated "device_resource"; otherwise deco.ErrUnsupported.
 func (c *Client) Performance(ctx context.Context) (*deco.Performance, error) {
-	if !c.hasComponent(ctx, "device_resource") {
+	comps, err := c.components(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !comps["device_resource"] {
 		return nil, deco.ErrUnsupported
 	}
 	nodes, err := c.Devices(ctx)
@@ -289,12 +306,14 @@ func (c *Client) Performance(ctx context.Context) (*deco.Performance, error) {
 	return parsePerformance(raw)
 }
 
-// hasComponent reports whether the session's COMP_NEGOTIATE listed id.
-func (c *Client) hasComponent(ctx context.Context, id string) bool {
+// components returns the session's COMP_NEGOTIATE component IDs, logging
+// in first if needed. Login and transport errors are returned as they are,
+// never disguised as a missing feature.
+func (c *Client) components(ctx context.Context) (map[string]bool, error) {
 	if err := c.Login(ctx); err != nil {
-		return false
+		return nil, err
 	}
-	return components(c.Negotiation())[id]
+	return components(c.Negotiation()), nil
 }
 
 // unsupported maps the device's "business failed" answer (AppV2 err 12)

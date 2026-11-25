@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"strings"
 	"testing"
 
+	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/deco/tmp"
 	"github.com/t0mer/atlantis/internal/deco/tmp/fakedeco"
 	"github.com/t0mer/atlantis/internal/deco/tmpclient"
@@ -75,5 +77,60 @@ func TestRawRefusesWrites(t *testing.T) {
 	c := newClient(t, fakedeco.New())
 	if _, err := c.Raw(context.Background(), tmpclient.RawArea, "WIRELESS_SET"); err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// Review findings for the write path.
+func TestSetHostWiFiToleratesOddReadBack(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, map[string]any{
+		"band2_4":       map[string]any{"host": map[string]any{"enable": true, "ssid": b64("old"), "password": b64("oldpass123")}},
+		"band6_2":       "unexpected",
+		"config_spec":   []any{1, 2},
+		"band_steering": map[string]any{"host": map[string]any{"ssid": b64("must-not-change")}},
+	})
+	c := newClient(t, d)
+	ch, err := c.SetHostWiFi(context.Background(), "new-ssid", "new-pass-1")
+	if err != nil {
+		t.Fatalf("a successful write was reported as failed: %v", err)
+	}
+	if len(ch.Bands) != 1 || ch.Bands[0] != "band2_4" {
+		t.Fatalf("%v", ch.Bands)
+	}
+	var sent struct {
+		Params map[string]any `json:"params"`
+	}
+	json.Unmarshal(d.Request(tmp.OpWirelessSet), &sent)
+	if _, ok := sent.Params["band_steering"]; ok {
+		t.Fatal("a non-band key was rewritten")
+	}
+}
+
+func TestSetHostWiFiRejectsControlCharsBeforeSending(t *testing.T) {
+	d := fakedeco.New()
+	c := newClient(t, d)
+	if _, err := c.SetHostWiFi(context.Background(), "a\nb", "longenough"); err == nil {
+		t.Fatal("control characters accepted")
+	}
+	if d.Request(tmp.OpWirelessSet) != nil {
+		t.Fatal("the write was sent")
+	}
+}
+
+func TestRequestRefusesWrites(t *testing.T) {
+	c := newClient(t, fakedeco.New())
+	if _, err := c.Request(context.Background(), tmp.OpWirelessSet, map[string]any{}); err == nil {
+		t.Fatal("Request sent a write")
+	}
+}
+
+func TestLoginErrorsAreNotUnsupported(t *testing.T) {
+	boom := errors.New("ssh: unable to authenticate")
+	c := tmpclient.New(func(context.Context, func(string, ...any)) (io.ReadWriteCloser, error) { return nil, boom }, tmp.Options{})
+	if _, err := c.WAN(context.Background()); !errors.Is(err, boom) || errors.Is(err, deco.ErrUnsupported) {
+		t.Fatalf("WAN: %v", err)
+	}
+	if _, err := c.Performance(context.Background()); !errors.Is(err, boom) {
+		t.Fatalf("Performance: %v", err)
 	}
 }
