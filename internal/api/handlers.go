@@ -18,6 +18,7 @@ import (
 	"github.com/t0mer/atlantis/internal/events"
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
+	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
 )
 
@@ -389,16 +390,63 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 // settings shows the effective, non-secret configuration. Changing it is
 // done in the YAML file or environment for now.
-func (s *Server) settings(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	c := s.Config
+	n, _, err := s.store.GetNetwork(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	p := s.Site.Poll()
+	source := "config"
+	if p.FromUI {
+		source = "ui"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"deco":    map[string]any{"transport": c.Deco.Transport, "host": c.Deco.Host, "port": c.Deco.Port, "email": c.Deco.Email},
-		"poll":    map[string]any{"fast": c.Poll.Fast.String(), "slow": c.Poll.Slow.String(), "offline_after_misses": c.Poll.OfflineAfterMisses},
+		"deco":    map[string]any{"transport": n.Transport, "host": n.Host, "port": n.Port, "email": n.Email},
+		"poll":    map[string]any{"fast": p.Fast.String(), "slow": p.Slow.String(), "offline_after_misses": p.OfflineAfterMisses, "source": source},
 		"store":   map[string]any{"raw_retention": c.Store.RawRetention.String(), "rollup_retention": c.Store.RollupRetention.String()},
 		"metrics": map[string]any{"enabled": c.Metrics.Enabled, "path": c.Metrics.Path, "per_client": c.Metrics.PerClient},
 		"notify":  map[string]any{"quiet_hours": c.Notify.QuietHours, "timezone": c.Notify.Timezone, "events": events.All},
 		"version": s.Version,
 	})
+}
+
+// putSettings changes the refresh intervals. Other settings stay in the
+// YAML file and environment.
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Poll *struct {
+			Fast               string `json:"fast"`
+			Slow               string `json:"slow"`
+			OfflineAfterMisses int    `json:"offline_after_misses"`
+		} `json:"poll"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if body.Poll == nil {
+		writeError(w, http.StatusBadRequest, "nothing to change: send poll")
+		return
+	}
+	fast, err1 := time.ParseDuration(body.Poll.Fast)
+	slow, err2 := time.ParseDuration(body.Poll.Slow)
+	if err1 != nil || err2 != nil {
+		writeError(w, http.StatusBadRequest, `intervals are durations such as "30s" or "5m"`)
+		return
+	}
+	p := site.Poll{Fast: fast, Slow: slow, OfflineAfterMisses: body.Poll.OfflineAfterMisses}
+	err := s.Site.SetPoll(r.Context(), p)
+	s.audit(r.Context(), userFrom(r.Context()), "settings.poll", fmt.Sprintf("fast=%s slow=%s offline_after=%d", fast, slow, p.OfflineAfterMisses), err)
+	if errors.Is(err, site.ErrInvalid) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.settings(w, r)
 }
 
 // channelView never includes the sealed config; secrets are write-only.

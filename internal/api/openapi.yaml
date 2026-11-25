@@ -295,9 +295,24 @@ paths:
       summary: Effective configuration (no secrets)
       responses: { "200": { description: OK } }
     put:
-      summary: Change settings (configure via YAML/environment for now)
+      summary: Change the refresh intervals; they apply at once and override the configuration. Other settings stay in YAML or the environment.
       security: [ { session: [], csrf: [] } ]
-      responses: { "501": { description: Not available yet } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [poll]
+              properties:
+                poll:
+                  type: object
+                  required: [fast, slow, offline_after_misses]
+                  properties:
+                    fast: { type: string, example: 30s, description: Device check (clients and load), 10s to 1h }
+                    slow: { type: string, example: 5m, description: Mesh check (Decos, internet, Wi-Fi, firmware), 10s to 1h and not shorter than fast }
+                    offline_after_misses: { type: integer, minimum: 1, maximum: 10 }
+      responses: { "200": { description: The effective settings }, "400": { description: Invalid intervals } }
   /api/v1/channels:
     get:
       summary: Notification channels (configs are never returned)

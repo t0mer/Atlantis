@@ -100,7 +100,7 @@ func (s *Server) Handler() http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireAuth)
 				r.Get("/settings", s.settings)
-				r.Put("/settings", notVerified)
+				r.Put("/settings", s.putSettings)
 				r.Get("/channels", s.listChannels)
 				r.Post("/channels", s.createChannel)
 				r.Put("/channels/{id}", s.updateChannel)

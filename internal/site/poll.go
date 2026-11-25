@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/t0mer/atlantis/internal/config"
+	"github.com/t0mer/atlantis/internal/poller"
 )
 
 // Poll are the refresh intervals. Values saved from the UI (settings key
@@ -59,5 +60,25 @@ func (s *Site) LoadPoll(ctx context.Context) error {
 	s.mu.Lock()
 	s.poll = p
 	s.mu.Unlock()
+	return nil
+}
+
+// SetPoll validates, saves and applies new intervals; the running poller
+// switches to them at once.
+func (s *Site) SetPoll(ctx context.Context, p Poll) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	p.FromUI = true
+	if err := s.d.Store.SetSetting(ctx, pollKey, p); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.poll = p
+	run := s.run
+	s.mu.Unlock()
+	if run != nil {
+		run.Poller.SetIntervals(poller.Intervals{Fast: p.Fast, Slow: p.Slow, OfflineAfter: p.OfflineAfterMisses})
+	}
 	return nil
 }

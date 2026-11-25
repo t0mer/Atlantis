@@ -167,7 +167,11 @@ func (s *Site) start(ctx context.Context, n store.Network, password string, keys
 	go func() { defer close(r.done); p.Run(rctx) }()
 	s.mu.Lock()
 	s.run = r
+	now := s.poll
 	s.mu.Unlock()
+	if now != pl { // SetPoll ran while this run was being built
+		p.SetIntervals(poller.Intervals{Fast: now.Fast, Slow: now.Slow, OfflineAfter: now.OfflineAfterMisses})
+	}
 	s.d.Hub.Publish(poller.Message{Kind: "deco", Data: nil})
 	s.d.Log.Info("deco connected", "host", n.Host, "transport", n.Transport)
 	return nil

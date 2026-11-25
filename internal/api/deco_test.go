@@ -62,3 +62,28 @@ func TestSpecIsValidYAML(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRefreshIntervals(t *testing.T) {
+	e := newEnv(t)
+	e.login(t)
+	_, m, _ := e.do(t, "GET", "/api/v1/settings", "", false)
+	if p := m["poll"].(map[string]any); p["fast"] != "1m0s" || p["source"] != "config" {
+		t.Fatalf("%v", p)
+	}
+	for _, bad := range []string{
+		`{"poll":{"fast":"5s","slow":"5m","offline_after_misses":2}}`,
+		`{"poll":{"fast":"5m","slow":"1m","offline_after_misses":2}}`,
+		`{"poll":{"fast":"30s","slow":"2h","offline_after_misses":2}}`,
+		`{"poll":{"fast":"30s","slow":"5m","offline_after_misses":0}}`,
+		`{"poll":{"fast":"soon","slow":"5m","offline_after_misses":2}}`,
+		`{}`,
+	} {
+		if code, _, _ := e.do(t, "PUT", "/api/v1/settings", bad, true); code != 400 {
+			t.Errorf("%s: %d", bad, code)
+		}
+	}
+	code, m, _ := e.do(t, "PUT", "/api/v1/settings", `{"poll":{"fast":"15s","slow":"2m","offline_after_misses":3}}`, true)
+	if p := m["poll"].(map[string]any); code != 200 || p["fast"] != "15s" || p["slow"] != "2m0s" || p["offline_after_misses"] != float64(3) || p["source"] != "ui" {
+		t.Fatalf("%d %v", code, m)
+	}
+}
