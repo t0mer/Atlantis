@@ -11,6 +11,16 @@ export function hoursOf(d: string): number {
   return Number(h) + Math.round(Number(m) / 60);
 }
 
+/** A switch with its label shown beside it. */
+function LabeledSwitch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <Switch checked={checked} onChange={onChange} label={label} />
+      <span className="text-sm">{label}</span>
+    </div>
+  );
+}
+
 const sourceNote = (src: SettingSource) => (src === "ui" ? "Set here." : "From the configuration file until you save here.");
 
 /** A settings panel: a Save button enabled when something changed, and where the values come from. */
@@ -124,7 +134,7 @@ export function NotificationsPanel({ s }: { s: Settings }) {
           ))}
         </select>
       </Field>
-      <Switch checked={quiet} onChange={setQuiet} label="Quiet hours: send nothing during these hours" />
+      <LabeledSwitch checked={quiet} onChange={setQuiet} label="Quiet hours: send nothing during these hours" />
       {quiet && (
         <div className="grid grid-cols-2 gap-4 sm:max-w-sm">
           <Field label="From">
@@ -217,7 +227,7 @@ export function MetricsPanel({ s }: { s: Settings }) {
       patch={() => ({ metrics: { enabled, path: path.trim(), per_client: per, token: secret(token.trim(), clear) } })}
       note={enabled ? `Scrape ${location.origin}${path}.` : undefined}
     >
-      <Switch checked={enabled} onChange={setEnabled} label="Serve Prometheus metrics" />
+      <LabeledSwitch checked={enabled} onChange={setEnabled} label="Serve Prometheus metrics" />
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Path">
           <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/metrics" disabled={!enabled} />
@@ -282,7 +292,7 @@ export function AdvancedPanel({ s }: { s: Settings }) {
         </Field>
       </div>
       <div>
-        <Switch checked={debug} onChange={setDebug} label="Debug endpoint (raw Deco replies, redacted)" />
+        <LabeledSwitch checked={debug} onChange={setDebug} label="Debug endpoint (raw Deco replies, redacted)" />
         {debug && <p className="mt-1 text-xs text-buoy">Turn this off again when you are done; it exposes raw replies to signed-in users.</p>}
       </div>
       <div>
