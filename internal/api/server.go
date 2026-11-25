@@ -40,9 +40,13 @@ type Deps struct {
 	Version   string
 	Log       *slog.Logger
 	// AcceptHostKey forgets the pinned SSH host key / certificate so the
-	// next connection trusts the device's current one.
+	// next connection trusts the device's current one. It returns
+	// ErrRestartRequired when the transport can only re-pin on restart.
 	AcceptHostKey func(ctx context.Context) error
 }
+
+// ErrRestartRequired means a change takes effect after a restart.
+var ErrRestartRequired = errors.New("restart Atlantis to apply this change")
 
 // Server is the HTTP API.
 type Server struct {

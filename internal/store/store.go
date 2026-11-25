@@ -164,6 +164,12 @@ func (s *Store) SetHostKey(ctx context.Context, networkID int64, fp string) erro
 	return err
 }
 
+// SetTLSPin stores the TLS certificate fingerprint to pin ("" clears it).
+func (s *Store) SetTLSPin(ctx context.Context, networkID int64, fp string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE networks SET tls_pin=? WHERE id=?`, fp, networkID)
+	return err
+}
+
 // SetNetworkName records the site's display name.
 func (s *Store) SetNetworkName(ctx context.Context, networkID int64, name string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE networks SET name=? WHERE id=?`, name, networkID)

@@ -637,6 +637,10 @@ func (s *Server) acceptHostKey(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.AcceptHostKey(r.Context())
 	s.audit(r.Context(), userFrom(r.Context()), "session.accept_host_key", s.Config.Deco.Host, err)
+	if errors.Is(err, ErrRestartRequired) {
+		writeError(w, http.StatusConflict, "the pinned certificate was cleared; restart Atlantis to trust the new one")
+		return
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
