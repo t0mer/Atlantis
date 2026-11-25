@@ -15,6 +15,7 @@ import type {
   SessionStatus,
   Settings,
   Wireless,
+  WirelessPatch,
 } from "./types";
 
 export type Range = "24h" | "7d" | "30d";
@@ -66,11 +67,10 @@ export function useUpdateClient(mac: string) {
   });
 }
 
-export function useSetMainWifi() {
+export function useSetWifi() {
   const done = useInvalidate(["wifi"]);
   return useMutation({
-    mutationFn: (body: { ssid: string; password: string }) =>
-      api<{ ssid: string; bands: string[] }>("/api/v1/wifi", { method: "PATCH", body: { network: "host", ...body } }),
+    mutationFn: (p: WirelessPatch) => api<{ network: string; bands: string[] }>("/api/v1/wifi", { method: "PATCH", body: p }),
     onSuccess: done,
   });
 }
