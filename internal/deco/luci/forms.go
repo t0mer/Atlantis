@@ -249,12 +249,11 @@ func (c *Client) RawParams(ctx context.Context, area, form string, params any) (
 	return redactJSON(raw)
 }
 
-var secretKeys = map[string]bool{"password": true, "passwd": true, "stok": true, "token": true}
-
 // redactJSON replaces the value of every secret-named key, at any depth.
+// Numbers are kept exactly.
 func redactJSON(raw json.RawMessage) (json.RawMessage, error) {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	v, err := decodeExact(raw)
+	if err != nil {
 		return nil, err
 	}
 	redactValue(v)
@@ -265,7 +264,7 @@ func redactValue(v any) {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, val := range t {
-			if secretKeys[strings.ToLower(k)] {
+			if isSecretKey(normKey(k)) {
 				t[k] = "[redacted]"
 			} else {
 				redactValue(val)

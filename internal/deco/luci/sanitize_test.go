@@ -3,6 +3,8 @@ package luci
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 )
@@ -59,5 +61,70 @@ func TestSanitizeReplacesIdentifiersConsistently(t *testing.T) {
 	}
 	if v.ClientList[0].UpSpeed.String() != "1200" {
 		t.Errorf("numbers must be preserved: %q", v.ClientList[0].UpSpeed)
+	}
+}
+
+// Cases found by independent review: each value must not survive sanitising.
+func TestSanitizeReviewLeakCases(t *testing.T) {
+	in := `{
+	  "a": "AABBCCDDEEFF",
+	  "b": "aabb.ccdd.eeff",
+	  "c": "http://192.168.68.1/x",
+	  "d": "192.168.68.0/24",
+	  "e": "10.0.0.5:8080",
+	  "f": "8.8.8.8 1.1.1.1",
+	  "nick_name": "Tomer's iPhone",
+	  "deviceName": "Kids-PC",
+	  "group_name": "SG9tZQ==",
+	  "free_text_b64": "16nXnNeV150=",
+	  "sn": 777000111222333444,
+	  "owner_id": 98765,
+	  "AA-BB-CC-DD-EE-01": {"10.0.0.9": true},
+	  "psk_key": "secretwifi",
+	  "wifi_password": "pw2",
+	  "big": 12345678901234567890
+	}`
+	out, err := NewSanitizer().Sanitize(json.RawMessage(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, leaked := range []string{
+		"AABBCCDDEEFF", "aabb.ccdd.eeff", "192.168.68.1", "192.168.68.0", "10.0.0.5", "8.8.8.8", "1.1.1.1",
+		"Tomer", "Kids-PC", "SG9tZQ==", "16nXnNeV150=", "777000111222333444", "98765",
+		"AA-BB-CC-DD-EE-01", "10.0.0.9", "secretwifi", "pw2",
+	} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("sanitised output still contains %q", leaked)
+		}
+	}
+	if !strings.Contains(got, "12345678901234567890") {
+		t.Errorf("large non-identifier number lost precision:\n%s", got)
+	}
+	if !strings.Contains(got, ":8080") || !strings.Contains(got, "/24") {
+		t.Errorf("structure around embedded IPs should be kept:\n%s", got)
+	}
+}
+
+func TestSanitizeIPReplacementsStayUnique(t *testing.T) {
+	s := NewSanitizer()
+	seen := map[string]string{}
+	for i := 0; i < 2000; i++ {
+		real := fmt.Sprintf("10.%d.%d.%d", i>>16&0xff, i>>8&0xff, i&0xff+1)
+		fake := s.ip(real, net.ParseIP(real))
+		if prev, dup := seen[fake]; dup {
+			t.Fatalf("%s and %s both became %s", prev, real, fake)
+		}
+		seen[fake] = real
+	}
+}
+
+func TestRawKeepsNumbersExactly(t *testing.T) {
+	out, err := redactJSON(json.RawMessage(`{"id":12345678901234567890,"password":"x"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "12345678901234567890") || strings.Contains(string(out), `"x"`) {
+		t.Fatalf("redactJSON output wrong: %s", out)
 	}
 }
