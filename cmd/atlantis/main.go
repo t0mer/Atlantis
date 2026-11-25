@@ -19,6 +19,7 @@ func main() {
 		SilenceErrors: false,
 	}
 	root.AddCommand(newProbeCmd())
+	root.AddCommand(newCloudCmd())
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the build version",
