@@ -137,13 +137,42 @@ func rsaEncryptHex(pub *rsa.PublicKey, plain []byte) (string, error) {
 	var sb strings.Builder
 	for off := 0; off < len(plain); off += chunk {
 		end := min(off+chunk, len(plain))
-		ct, err := rsa.EncryptPKCS1v15(rand.Reader, pub, plain[off:end])
+		ct, err := pkcs1v15Encrypt(pub, plain[off:end])
 		if err != nil {
 			return "", fmt.Errorf("RSA encrypt: %w", err)
 		}
 		sb.WriteString(hex.EncodeToString(ct))
 	}
 	return sb.String(), nil
+}
+
+// pkcs1v15Encrypt is RSAES-PKCS1-v1_5 encryption (RFC 8017 §7.2.1). The
+// standard library refuses keys below 1024 bits, but some Deco firmware
+// (the M5, for one) hands out 512-bit keys for this protocol. The key is
+// the device's choice and public, so encrypting with it needs no
+// constant-time care; doing the padding here avoids weakening RSA checks
+// for the whole process with GODEBUG.
+func pkcs1v15Encrypt(pub *rsa.PublicKey, msg []byte) ([]byte, error) {
+	k := (pub.N.BitLen() + 7) / 8
+	if len(msg) > k-11 {
+		return nil, errors.New("message too long for RSA key")
+	}
+	em := make([]byte, k)
+	em[1] = 2
+	ps := em[2 : k-len(msg)-1]
+	if _, err := rand.Read(ps); err != nil {
+		return nil, err
+	}
+	for i := range ps { // padding bytes must be non-zero
+		for ps[i] == 0 {
+			if _, err := rand.Read(ps[i : i+1]); err != nil {
+				return nil, err
+			}
+		}
+	}
+	copy(em[k-len(msg):], msg)
+	c := new(big.Int).Exp(new(big.Int).SetBytes(em), big.NewInt(int64(pub.E)), pub.N)
+	return c.FillBytes(make([]byte, k)), nil
 }
 
 // signedBody builds the form body for a signed request:
