@@ -35,5 +35,6 @@ test("goDuration reads Go durations", () => {
   expect(goDuration("5m0s")).toBe("5 minutes");
   expect(goDuration("1h30m0s")).toBe("90 minutes");
   expect(goDuration("10s")).toBe("10 seconds");
+  expect(goDuration("0s")).toBe("0 seconds");
   expect(goDuration("odd")).toBe("odd");
 });

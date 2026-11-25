@@ -119,6 +119,7 @@ export function goDuration(d: string): string {
   if (!m || !d) return d;
   const secs = Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
   const unit = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  if (secs === 0) return unit(0, "second");
   if (secs % 86400 === 0) return unit(secs / 86400, "day");
   if (secs % 3600 === 0) return unit(secs / 3600, "hour");
   if (secs % 60 === 0) return unit(secs / 60, "minute");
