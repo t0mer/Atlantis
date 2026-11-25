@@ -42,36 +42,38 @@ const (
 
 // Backhaul describes a node's link to its parent. The master has none.
 type Backhaul struct {
-	Type string
+	Type string `json:"type"`
 	// Links are the device's own connection_type values, e.g. "band5",
 	// "wired", "plc" or a multi-link combination such as "band2+band5".
-	Links []string
+	Links []string `json:"links"`
 	// Signal maps a band (band2_4, band5_1, band5_2, band6, band6_2) to a
 	// level in bars; 3 or more is strong, 2 medium, less weak.
-	Signal map[string]int
+	Signal map[string]int `json:"signal"`
 }
 
 // Device is one mesh node (main unit or satellite).
 type Device struct {
-	ID          string // device_id on TMP; the MAC on the local web API
-	MAC         string // aa:bb:cc:dd:ee:ff
-	IP          string
-	Nickname    string
-	Model       string
-	HardwareVer string
-	SoftwareVer string
-	Master      bool
+	ID          string `json:"id"`  // device_id on TMP; the MAC on the local web API
+	MAC         string `json:"mac"` // aa:bb:cc:dd:ee:ff
+	IP          string `json:"ip"`
+	Nickname    string `json:"nickname"`
+	Model       string `json:"model"`
+	HardwareVer string `json:"hardware_ver"`
+	SoftwareVer string `json:"software_ver"`
+	Master      bool   `json:"master"`
 	// Online reports the node as connected to the mesh.
-	Online bool
+	Online bool `json:"online"`
 	// InternetOnline reports the node's internet as working.
-	InternetOnline bool
+	InternetOnline bool `json:"internet_online"`
 	// InternetError is the device's reason when the internet is down, e.g.
 	// "wan_port_unplugged" or "sim_absent" (empty when online).
-	InternetError string
-	ParentID      string // the upstream node's ID; empty for the master
-	Backhaul      Backhaul
+	InternetError string   `json:"internet_error"`
+	ParentID      string   `json:"parent_id"` // the upstream node's ID; empty for the master
+	Backhaul      Backhaul `json:"backhaul"`
 	// Raw status strings, kept so values this code does not know are not lost.
-	Role, GroupStatus, InetStatus string
+	Role        string `json:"role"`
+	GroupStatus string `json:"group_status"`
+	InetStatus  string `json:"inet_status"`
 }
 
 // Client network names (the device's "interface").
@@ -84,78 +86,79 @@ const (
 
 // WifiClient is a client device seen by the mesh, online or offline.
 type WifiClient struct {
-	MAC     string
-	IP      string
-	Name    string
-	Type    string // phone, laptop, iot_device, ... when the device reports one
-	Online  bool
-	Network string // main, guest, iot, mlo, or as reported
-	Wired   bool
+	MAC     string `json:"mac"`
+	IP      string `json:"ip"`
+	Name    string `json:"name"`
+	Type    string `json:"type"` // phone, laptop, iot_device, ... when the device reports one
+	Online  bool   `json:"online"`
+	Network string `json:"network"` // main, guest, iot, mlo, or as reported
+	Wired   bool   `json:"wired"`
 	// Band is the Wi-Fi band in the WIRELESS band naming (band2_4,
 	// band5_1, band6, ...); empty for wired clients.
-	Band   string
-	NodeID string // the node the client is attached to; the master if unknown
+	Band   string `json:"band"`
+	NodeID string `json:"node_id"` // the node the client is attached to; the master if unknown
 	// SignalLevel is in bars (3+ strong); 0 when unknown or wired.
-	SignalLevel int
+	SignalLevel int `json:"signal_level"`
 	// UpBps and DownBps are the current rates in bits per second.
-	UpBps, DownBps int64
+	UpBps   int64 `json:"up_bps"`
+	DownBps int64 `json:"down_bps"`
 }
 
 // WANStatus describes the main unit's internet connection.
 type WANStatus struct {
-	Online   bool
-	MAC      string
-	IP       string
-	Gateway  string
-	Mask     string
-	DNS1     string
-	DNS2     string
-	DialType string // dynamic_ip, static_ip, pppoe, ...
-	LANIP    string
-	LANMask  string
+	Online   bool   `json:"online"`
+	MAC      string `json:"mac"`
+	IP       string `json:"ip"`
+	Gateway  string `json:"gateway"`
+	Mask     string `json:"mask"`
+	DNS1     string `json:"dns1"`
+	DNS2     string `json:"dns2"`
+	DialType string `json:"dial_type"` // dynamic_ip, static_ip, pppoe, ...
+	LANIP    string `json:"lan_ip"`
+	LANMask  string `json:"lan_mask"`
 }
 
 // Performance is the main unit's load.
 type Performance struct {
-	CPUUsage float64 // 0..1
-	MemUsage float64 // 0..1
+	CPUUsage float64 `json:"cpu_usage"` // 0..1
+	MemUsage float64 `json:"mem_usage"` // 0..1
 }
 
 // NetworkConfig is one Wi-Fi network on a band. The password is
 // deliberately absent: it is never returned to callers.
 type NetworkConfig struct {
-	Enable     bool
-	SSID       string
-	Encryption string
-	Hidden     bool
+	Enable     bool   `json:"enable"`
+	SSID       string `json:"ssid"`
+	Encryption string `json:"encryption"`
+	Hidden     bool   `json:"hidden"`
 }
 
 // Radio is one band's radio.
 type Radio struct {
-	Enable  bool
-	Channel string // "auto" or a channel number
+	Enable  bool   `json:"enable"`
+	Channel string `json:"channel"` // "auto" or a channel number
 }
 
 // Band is one Wi-Fi band and its networks (host, guest, iot, ...).
 type Band struct {
-	Radio    Radio
-	Networks map[string]NetworkConfig
+	Radio    Radio                    `json:"radio"`
+	Networks map[string]NetworkConfig `json:"networks"`
 }
 
 // WirelessConfig is keyed by the device's own band names (band2_4,
 // band5_1, band5_2, band6, band6_2, band60), so new bands need no code.
 type WirelessConfig struct {
-	Bands map[string]Band
+	Bands map[string]Band `json:"bands"`
 }
 
 // Firmware is the update state for one model of node in the mesh.
 type Firmware struct {
-	Model            string
-	NodeIDs          []string
-	LatestVersion    string
-	ReleaseDate      string
-	ReleaseNote      string
-	UpgradeAvailable bool
+	Model            string   `json:"model"`
+	NodeIDs          []string `json:"node_ids"`
+	LatestVersion    string   `json:"latest_version"`
+	ReleaseDate      string   `json:"release_date"`
+	ReleaseNote      string   `json:"release_note"`
+	UpgradeAvailable bool     `json:"upgrade_available"`
 }
 
 // Client is the device API used by the poller and the HTTP layer.

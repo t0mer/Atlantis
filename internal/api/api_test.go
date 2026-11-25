@@ -180,7 +180,7 @@ func TestReadEndpoints(t *testing.T) {
 		t.Fatalf("network: %s", raw)
 	}
 	_, _, nodes := e.do(t, "GET", "/api/v1/nodes", "", false)
-	if !strings.Contains(nodes, `"Nickname":"Main"`) || !strings.Contains(nodes, `"clients":1`) {
+	if !strings.Contains(nodes, `"nickname":"Main"`) || !strings.Contains(nodes, `"clients":1`) {
 		t.Fatalf("nodes: %s", nodes)
 	}
 	_, _, cl := e.do(t, "GET", "/api/v1/clients?online=true", "", false)
@@ -317,7 +317,7 @@ func TestStreamSendsSnapshot(t *testing.T) {
 			lines = append(lines, l)
 		}
 	}
-	if len(lines) < 4 || lines[0] != "event: snapshot" || !strings.Contains(lines[1], `"Nickname":"Main"`) || lines[2] != "event: session" {
+	if len(lines) < 4 || lines[0] != "event: snapshot" || !strings.Contains(lines[1], `"nickname":"Main"`) || lines[2] != "event: session" {
 		t.Fatalf("%v", lines)
 	}
 }
