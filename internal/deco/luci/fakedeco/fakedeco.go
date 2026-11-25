@@ -45,6 +45,8 @@ type Fake struct {
 	busy          bool
 	redirectToTLS bool
 	results       map[string]any
+	pages         map[string]string
+	rootRedirect  string
 }
 
 type key struct{ k, i string }
@@ -65,6 +67,9 @@ func New(password string) (*Fake, error) {
 		signPriv: sp,
 		seq:      7001,
 		results:  defaultResults(),
+		pages:    defaultPages(),
+
+		rootRedirect: "/webpages/index.html",
 	}
 	f.Plain = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -107,11 +112,45 @@ func (f *Fake) SetBusy(v bool)              { f.busy = v }
 func (f *Fake) SetRedirectToTLS(v bool)     { f.redirectToTLS = v }
 func (f *Fake) SetExpireAfter(n int)        { f.expireIn = n }
 func (f *Fake) SetResult(key string, v any) { f.results[key] = v }
+func (f *Fake) SetPage(path, body string)   { f.pages[path] = body }
+func (f *Fake) SetRootRedirect(loc string)  { f.rootRedirect = loc }
 
 // TLSFingerprint returns the hex SHA-256 of the TLS leaf certificate.
 func (f *Fake) TLSFingerprint() string {
 	sum := sha256.Sum256(f.TLS.Certificate().Raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// defaultPages is a miniature web UI: "/" redirects to an index page whose
+// scripts reference forms, including one only reachable via a nested script.
+func defaultPages() map[string]string {
+	return map[string]string{
+		"/webpages/index.html": `<html><head><script src="js/app.js?v=3"></script></head></html>`,
+		"/webpages/js/app.js": `var m = $.su.url("/admin/device?form=device_list");
+proxy({operation: "read"});
+require("modules/wifi.js");`,
+		"/webpages/js/modules/wifi.js": `var w = {url: "admin/wireless?form=wlan", operation: "write"};
+var led = "?form=led";`,
+	}
+}
+
+func (f *Fake) servePage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		w.Header().Set("Location", f.rootRedirect)
+		w.WriteHeader(http.StatusFound)
+		return
+	}
+	body, ok := f.pages[r.URL.Path]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if strings.HasSuffix(r.URL.Path, ".js") {
+		w.Header().Set("Content-Type", "application/javascript")
+	} else {
+		w.Header().Set("Content-Type", "text/html")
+	}
+	_, _ = w.Write([]byte(body))
 }
 
 func defaultResults() map[string]any {
@@ -153,6 +192,10 @@ func defaultResults() map[string]any {
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if r.Method == http.MethodGet {
+		f.servePage(w, r)
+		return
+	}
 	rest, ok := strings.CutPrefix(r.URL.Path, adminPrefix)
 	if !ok {
 		http.NotFound(w, r)

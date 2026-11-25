@@ -157,15 +157,32 @@ type response struct {
 	header http.Header
 }
 
-// send POSTs body to path. On a 307/308 to an https URL on the same host it
-// switches the base to https, persists the change, and retries once.
+// Response size limits: API replies are small; web UI bundles can be large.
+const (
+	maxAPIResponseBytes  = 1 << 20
+	maxPageResponseBytes = 8 << 20
+)
+
+// send POSTs body to path. See do.
 func (c *Client) send(ctx context.Context, path, contentType, body, cookie string) (*response, error) {
+	return c.do(ctx, http.MethodPost, path, contentType, body, cookie, maxAPIResponseBytes)
+}
+
+// do performs one request. On a 307/308 to an https URL on the same host it
+// switches the base to https, persists the change, and retries once.
+func (c *Client) do(ctx context.Context, method, path, contentType, body, cookie string, maxBytes int64) (*response, error) {
 	for hop := 0; hop < 2; hop++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base.String()+path, strings.NewReader(body))
+		var rd io.Reader
+		if body != "" {
+			rd = strings.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.base.String()+path, rd)
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Content-Type", contentType)
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
 		if cookie != "" {
 			req.Header.Set("Cookie", cookie)
 		}
@@ -174,7 +191,7 @@ func (c *Client) send(ctx context.Context, path, contentType, body, cookie strin
 			// The URL carries the session token; keep it out of error text.
 			return nil, redactedError{msg: stokInURLRE.ReplaceAllString(err.Error(), ";stok=[redacted]"), err: err}
 		}
-		b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		b, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("reading device response: %w", err)

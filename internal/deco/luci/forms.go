@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/t0mer/atlantis/internal/deco"
+	"github.com/t0mer/atlantis/internal/deco/fixture"
 )
 
 // Read-only forms (CLAUDE.md §4.1.6). Write forms are added only after the
@@ -237,38 +238,14 @@ func (c *Client) Wireless(ctx context.Context) (*deco.WirelessConfig, error) {
 // Raw returns the decrypted result of a read-only call, with secret-bearing
 // fields (passwords, tokens) replaced by "[redacted]". Debug use only.
 func (c *Client) Raw(ctx context.Context, area, form string) (json.RawMessage, error) {
-	raw, err := c.call(ctx, area, form, "read", nil)
+	return c.RawParams(ctx, area, form, nil)
+}
+
+// RawParams is Raw with request params, for forms that need them (client_list).
+func (c *Client) RawParams(ctx context.Context, area, form string, params any) (json.RawMessage, error) {
+	raw, err := c.call(ctx, area, form, "read", params)
 	if err != nil {
 		return nil, err
 	}
-	return redactJSON(raw)
-}
-
-var secretKeys = map[string]bool{"password": true, "passwd": true, "stok": true, "token": true}
-
-// redactJSON replaces the value of every secret-named key, at any depth.
-func redactJSON(raw json.RawMessage) (json.RawMessage, error) {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, err
-	}
-	redactValue(v)
-	return json.Marshal(v)
-}
-
-func redactValue(v any) {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, val := range t {
-			if secretKeys[strings.ToLower(k)] {
-				t[k] = "[redacted]"
-			} else {
-				redactValue(val)
-			}
-		}
-	case []any:
-		for _, e := range t {
-			redactValue(e)
-		}
-	}
+	return fixture.Redact(raw)
 }
