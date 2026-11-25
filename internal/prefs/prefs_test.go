@@ -115,6 +115,8 @@ func TestValidation(t *testing.T) {
 		"rollup < raw":      func(v *Values) { v.History.RollupRetention = time.Hour },
 		"metrics path /":    func(v *Values) { v.Metrics.Path = "/" },
 		"metrics under api": func(v *Values) { v.Metrics.Path = "/api/v1/x" },
+		"metrics on health": func(v *Values) { v.Metrics.Path = "/health" },
+		"metrics on a page": func(v *Values) { v.Metrics.Path = "/settings" },
 		"per client":        func(v *Values) { v.Metrics.PerClient = "some" },
 		"quiet hours":       func(v *Values) { v.Notify.QuietHours = "25:00-07:00" },
 		"timezone":          func(v *Values) { v.Notify.Timezone = "" },
@@ -127,5 +129,31 @@ func TestValidation(t *testing.T) {
 		if err := Validate(v); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// One bad section neither blocks saving another nor drops the rest.
+func TestSectionsAreIndependent(t *testing.T) {
+	p, st, box := newPrefs(t)
+	ctx := context.Background()
+	if _, err := p.Update(ctx, Patch{Logging: &LoggingPrefs{Level: "debug"}}); err != nil {
+		t.Fatal(err)
+	}
+	// A configuration value the UI would not accept doesn't block another panel.
+	c := cfg()
+	c.Server.BaseURL = "atlantis.lan"
+	p2 := New(c, st, box)
+	p2.Load(ctx)
+	if _, err := p2.Update(ctx, Patch{Debug: &config.Debug{Enabled: true}}); err != nil {
+		t.Fatalf("saving debug must not fail on the public address: %v", err)
+	}
+	// A saved section that no longer validates falls back alone.
+	st.SetSetting(ctx, History, HistoryPrefs{RawRetention: time.Minute, RollupRetention: time.Hour})
+	p3 := New(cfg(), st, box)
+	if err := p3.Load(ctx); err == nil {
+		t.Fatal("the bad section must be reported")
+	}
+	if p3.FromUI(History) || !p3.FromUI(Logging) || p3.Get().Logging.Level != "debug" {
+		t.Fatal("only the bad section may fall back")
 	}
 }

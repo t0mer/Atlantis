@@ -193,11 +193,14 @@ func (p *Prefs) Load(ctx context.Context) error {
 	if load(Debug, &d) {
 		v.Debug, from[Debug] = d, true
 	}
-	// The configuration's own values were checked by config.Validate; only
-	// a mix with saved sections needs checking here.
-	if len(from) > 0 {
-		if err := Validate(v); err != nil {
-			return errors.Join(append(errs, fmt.Errorf("saved settings are not valid, using the configuration: %w", err))...)
+	// A saved section that no longer validates falls back to the
+	// configuration's value on its own; the other sections are kept.
+	cfgv := p.Get()
+	for sec := range from {
+		if err := validateSection(sec, v); err != nil {
+			errs = append(errs, fmt.Errorf("saved %s settings are not valid, using the configuration: %w", sec, err))
+			setSection(&v, cfgv, sec)
+			delete(from, sec)
 		}
 	}
 	p.mu.Lock()
@@ -222,12 +225,9 @@ type savedOpenWA struct {
 	APIKey      string `json:"api_key"` // sealed
 }
 
-// Update validates every section in the patch, then saves and applies them
-// all, so a request changes everything or nothing. It returns the names of
-// the changed sections.
-func (p *Prefs) Update(ctx context.Context, pt Patch) ([]string, error) {
-	p.set.Lock()
-	defer p.set.Unlock()
+// apply returns the values with the patch applied and the changed
+// sections, validating only those sections.
+func (p *Prefs) apply(pt Patch) (Values, []string, error) {
 	v := p.Get()
 	var changed []string
 	if pt.History != nil {
@@ -237,9 +237,9 @@ func (p *Prefs) Update(ctx context.Context, pt Patch) ([]string, error) {
 	if pt.Metrics != nil {
 		tok := v.Metrics.Token
 		if pt.Metrics.Token != nil {
-			tok = *pt.Metrics.Token
+			tok = strings.TrimSpace(*pt.Metrics.Token)
 		}
-		v.Metrics = config.Metrics{Enabled: pt.Metrics.Enabled, Path: pt.Metrics.Path, PerClient: pt.Metrics.PerClient, Token: tok}
+		v.Metrics = config.Metrics{Enabled: pt.Metrics.Enabled, Path: strings.TrimSpace(pt.Metrics.Path), PerClient: pt.Metrics.PerClient, Token: tok}
 		changed = append(changed, Metrics)
 	}
 	if pt.Notify != nil {
@@ -255,7 +255,7 @@ func (p *Prefs) Update(ctx context.Context, pt Patch) ([]string, error) {
 		changed = append(changed, OpenWA)
 	}
 	if pt.Access != nil {
-		v.Access = AccessPrefs{BaseURL: strings.TrimRight(strings.TrimSpace(pt.Access.BaseURL), "/")}
+		v.Access = AccessPrefs{BaseURL: normalizeURL(pt.Access.BaseURL)}
 		changed = append(changed, Access)
 	}
 	if pt.Logging != nil {
@@ -267,20 +267,61 @@ func (p *Prefs) Update(ctx context.Context, pt Patch) ([]string, error) {
 		changed = append(changed, Debug)
 	}
 	if len(changed) == 0 {
-		return nil, fmt.Errorf("%w: nothing to change", ErrInvalid)
+		return v, nil, fmt.Errorf("%w: nothing to change", ErrInvalid)
 	}
-	if err := Validate(v); err != nil {
+	var errs []error
+	for _, sec := range changed {
+		errs = append(errs, validateSection(sec, v))
+	}
+	return v, changed, errors.Join(errs...)
+}
+
+// Check validates a patch without saving it.
+func (p *Prefs) Check(pt Patch) error {
+	_, _, err := p.apply(pt)
+	return err
+}
+
+// Sections returns the section names a patch touches.
+func (pt Patch) Sections() []string {
+	var out []string
+	for _, s := range []struct {
+		name string
+		set  bool
+	}{{History, pt.History != nil}, {Metrics, pt.Metrics != nil}, {Notify, pt.Notify != nil}, {OpenWA, pt.OpenWA != nil},
+		{Access, pt.Access != nil}, {Logging, pt.Logging != nil}, {Debug, pt.Debug != nil}} {
+		if s.set {
+			out = append(out, s.name)
+		}
+	}
+	return out
+}
+
+// Update validates the sections in the patch, saves them in one
+// transaction and applies them, so a request changes all of them or none.
+// It returns the names of the changed sections.
+func (p *Prefs) Update(ctx context.Context, pt Patch) ([]string, error) {
+	p.set.Lock()
+	defer p.set.Unlock()
+	v, changed, err := p.apply(pt)
+	if err != nil {
 		return nil, err
 	}
-	for _, s := range changed {
-		if err := p.save(ctx, s, v); err != nil {
+	vals := map[string]any{}
+	for _, sec := range changed {
+		val, err := p.stored(sec, v)
+		if err != nil {
 			return nil, err
 		}
+		vals[sec] = val
+	}
+	if err := p.st.SetSettings(ctx, vals); err != nil {
+		return nil, err
 	}
 	p.mu.Lock()
 	p.v = v
-	for _, s := range changed {
-		p.fromUI[s] = true
+	for _, sec := range changed {
+		p.fromUI[sec] = true
 	}
 	p.mu.Unlock()
 	for _, fn := range p.onApply {
@@ -289,7 +330,8 @@ func (p *Prefs) Update(ctx context.Context, pt Patch) ([]string, error) {
 	return changed, nil
 }
 
-func (p *Prefs) save(ctx context.Context, section string, v Values) error {
+// stored is the value saved for a section, with secrets sealed.
+func (p *Prefs) stored(section string, v Values) (any, error) {
 	var val any
 	switch section {
 	case History:
@@ -297,7 +339,7 @@ func (p *Prefs) save(ctx context.Context, section string, v Values) error {
 	case Metrics:
 		tok, err := p.box.Seal(v.Metrics.Token)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		val = savedMetrics{Enabled: v.Metrics.Enabled, Path: v.Metrics.Path, PerClient: v.Metrics.PerClient, Token: tok}
 	case Notify:
@@ -305,7 +347,7 @@ func (p *Prefs) save(ctx context.Context, section string, v Values) error {
 	case OpenWA:
 		key, err := p.box.Seal(v.OpenWA.APIKey)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		val = savedOpenWA{URL: v.OpenWA.URL, DefaultChat: v.OpenWA.DefaultChat, APIKey: key}
 	case Access:
@@ -315,64 +357,112 @@ func (p *Prefs) save(ctx context.Context, section string, v Values) error {
 	case Debug:
 		val = v.Debug
 	}
-	return p.st.SetSetting(ctx, section, val)
+	return val, nil
 }
+
+// setSection copies one section from src into v.
+func setSection(v *Values, src Values, section string) {
+	switch section {
+	case History:
+		v.History = src.History
+	case Metrics:
+		v.Metrics = src.Metrics
+	case Notify:
+		v.Notify = src.Notify
+	case OpenWA:
+		v.OpenWA = src.OpenWA
+	case Access:
+		v.Access = src.Access
+	case Logging:
+		v.Logging = src.Logging
+	case Debug:
+		v.Debug = src.Debug
+	}
+}
+
+// normalizeURL trims a URL and lowercases its scheme.
+func normalizeURL(s string) string {
+	s = strings.TrimRight(strings.TrimSpace(s), "/")
+	if scheme, rest, ok := strings.Cut(s, "://"); ok {
+		s = strings.ToLower(scheme) + "://" + rest
+	}
+	return s
+}
+
+// reservedPaths are Atlantis's own routes; the metrics path may not take one.
+var reservedPaths = []string{"/api", "/assets", "/health", "/clients", "/nodes", "/wifi", "/events", "/settings"}
 
 // Validate checks every section.
 func Validate(v Values) error {
 	var errs []error
+	for _, sec := range Sections {
+		errs = append(errs, validateSection(sec, v))
+	}
+	return errors.Join(errs...)
+}
+
+func validateSection(section string, v Values) error {
+	var errs []error
 	bad := func(format string, a ...any) {
 		errs = append(errs, fmt.Errorf("%w: "+format, append([]any{ErrInvalid}, a...)...))
 	}
-
-	h := v.History
-	if h.RawRetention < time.Hour || h.RawRetention > 365*24*time.Hour {
-		bad("raw samples are kept from 1 hour to 1 year")
-	}
-	if h.RollupRetention < h.RawRetention || h.RollupRetention > 10*365*24*time.Hour {
-		bad("hourly history is kept at least as long as raw samples, and at most 10 years")
-	}
-
-	m := v.Metrics
-	if !strings.HasPrefix(m.Path, "/") || m.Path == "/" || strings.HasPrefix(m.Path, "/api") || strings.ContainsAny(m.Path, " ?#") {
-		bad("the metrics path must start with / and not be / or under /api")
-	}
-	switch m.PerClient {
-	case "all", "watched", "none":
-	default:
-		bad("per-device metrics must be all, watched or none")
-	}
-	if len(m.Token) > 256 {
-		bad("the metrics token is too long")
-	}
-
-	n := v.Notify
-	if n.QuietHours != "" {
-		if _, _, err := config.ParseQuietHours(n.QuietHours); err != nil {
-			bad("quiet hours: %v", err)
+	switch section {
+	case History:
+		h := v.History
+		if h.RawRetention < time.Hour || h.RawRetention > 365*24*time.Hour {
+			bad("raw samples are kept from 1 hour to 1 year")
 		}
-	}
-	if n.Timezone == "" {
-		bad("the time zone is required")
-	} else if _, err := time.LoadLocation(n.Timezone); err != nil {
-		bad("unknown time zone %q", n.Timezone)
-	}
-
-	if err := checkURL(v.OpenWA.URL); err != nil {
-		bad("OpenWA URL: %v", err)
-	}
-	if len(v.OpenWA.APIKey) > 512 || len(v.OpenWA.DefaultChat) > 128 {
-		bad("OpenWA key or chat is too long")
-	}
-
-	if err := checkURL(v.Access.BaseURL); err != nil {
-		bad("public URL: %v", err)
-	}
-
-	switch v.Logging.Level {
-	case "debug", "info", "warn", "error":
-	default:
-		bad("the log level must be debug, info, warn or error")
+		if h.RollupRetention < h.RawRetention || h.RollupRetention > 10*365*24*time.Hour {
+			bad("hourly history is kept at least as long as raw samples, and at most 10 years")
+		}
+	case Metrics:
+		m := v.Metrics
+		reserved := false
+		for _, r := range reservedPaths {
+			if m.Path == r || strings.HasPrefix(m.Path, r+"/") {
+				reserved = true
+			}
+		}
+		if !strings.HasPrefix(m.Path, "/") || m.Path == "/" || reserved || strings.ContainsAny(m.Path, " ?#") {
+			bad("the metrics path must start with / and not be one of Atlantis's own pages (%s)", strings.Join(reservedPaths, ", "))
+		}
+		switch m.PerClient {
+		case "all", "watched", "none":
+		default:
+			bad("per-device metrics must be all, watched or none")
+		}
+		if len(m.Token) > 256 {
+			bad("the metrics token is too long")
+		}
+	case Notify:
+		n := v.Notify
+		if n.QuietHours != "" {
+			if _, _, err := config.ParseQuietHours(n.QuietHours); err != nil {
+				bad("quiet hours: %v", err)
+			}
+		}
+		if n.Timezone == "" {
+			bad("the time zone is required")
+		} else if _, err := time.LoadLocation(n.Timezone); err != nil {
+			bad("unknown time zone %q", n.Timezone)
+		}
+	case OpenWA:
+		if err := checkURL(v.OpenWA.URL); err != nil {
+			bad("OpenWA URL: %v", err)
+		}
+		if len(v.OpenWA.APIKey) > 512 || len(v.OpenWA.DefaultChat) > 128 {
+			bad("OpenWA key or chat is too long")
+		}
+	case Access:
+		if err := checkURL(v.Access.BaseURL); err != nil {
+			bad("public address: %v", err)
+		}
+	case Logging:
+		switch v.Logging.Level {
+		case "debug", "info", "warn", "error":
+		default:
+			bad("the log level must be debug, info, warn or error")
+		}
 	}
 	return errors.Join(errs...)
 }
