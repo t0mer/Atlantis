@@ -214,3 +214,31 @@ func TestTransportErrorsDoNotLeakToken(t *testing.T) {
 		t.Fatalf("token leaked or no error: %v", err)
 	}
 }
+
+func TestFailedReloginIsNotRepeated(t *testing.T) {
+	f := fakecloud.New()
+	defer f.Close()
+	f.SetDevices([]fakecloud.Device{{ID: "d1", Master: true, GroupID: "g1"}})
+	c := newClient(t, f)
+	ctx := context.Background()
+	if err := c.Login(ctx, fakecloud.Email, fakecloud.Password); err != nil {
+		t.Fatal(err)
+	}
+	f.SetRequireMFA(true) // the automatic re-login will need the user
+	f.ExpireTokens()
+	if _, err := c.Sites(ctx); err == nil {
+		t.Fatal("re-login needing MFA should fail")
+	}
+	if _, err := c.Sites(ctx); !errors.Is(err, tplinkcloud.ErrNotLoggedIn) {
+		t.Fatalf("second call must not sign in again, got %v", err)
+	}
+	n := 0
+	for _, p := range f.Paths() {
+		if p == "/api/v2/account/login" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("want 2 login requests (initial + one re-login), got %d", n)
+	}
+}

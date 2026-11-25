@@ -199,6 +199,9 @@ func (c *Client) relogin(ctx context.Context, expired string) (string, error) {
 		return "", fmt.Errorf("token expired: %w", ErrNotLoggedIn)
 	}
 	if err := c.loginLocked(ctx, c.email, c.password); err != nil {
+		// One automatic sign-in per expiry: concurrent callers must not try
+		// again, and an MFA challenge needs the user (a new Login).
+		c.password = ""
 		return "", fmt.Errorf("token expired, re-login failed: %w", err)
 	}
 	return c.token, nil
