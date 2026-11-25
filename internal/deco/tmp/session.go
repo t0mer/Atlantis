@@ -434,13 +434,13 @@ func (s *Session) Close() error {
 		if s.token != nil && s.deadErr() == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			// The reply is ignored, as in the app (o.java M()).
-			s.transact(ctx, OpTokenFree, s.token, nil)
+			_, _, _ = s.transact(ctx, OpTokenFree, s.token, nil)
 			cancel()
 			s.token = nil
 		}
 		s.mu.Unlock()
 		if s.deadErr() == nil {
-			s.writeFrame(Frame{Ctrl: CtrlBye})
+			_ = s.writeFrame(Frame{Ctrl: CtrlBye}) // best effort; the transport closes next
 		}
 		close(s.done)
 		err = s.conn.Close()

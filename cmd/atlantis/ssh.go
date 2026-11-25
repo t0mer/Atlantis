@@ -245,7 +245,7 @@ network disconnects until it reconnects with the new details.`,
 			if err != nil {
 				return err
 			}
-			defer c.Logout(ctx)
+			defer func() { _ = c.Logout(ctx) }() // best effort; the change already happened or failed
 			ch, err := c.SetHostWiFi(ctx, ssid, wifiPass)
 			if err != nil {
 				return err

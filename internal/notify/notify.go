@@ -163,9 +163,7 @@ func urlSecrets(raw string) []string {
 	for _, vs := range u.Query() {
 		out = append(out, vs...)
 	}
-	for _, seg := range strings.Split(u.Path, "/") {
-		out = append(out, seg)
-	}
+	out = append(out, strings.Split(u.Path, "/")...)
 	return out
 }
 

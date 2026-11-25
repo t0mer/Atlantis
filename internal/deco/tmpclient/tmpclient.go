@@ -27,11 +27,6 @@ type Dialer func(ctx context.Context, logf func(string, ...any)) (io.ReadWriteCl
 // "DEVICE_LIST_GET".
 const RawArea = "tmp"
 
-// ErrNotImplemented is kept for callers written against the stubs.
-//
-// Deprecated: every typed read is implemented.
-var ErrNotImplemented = errors.New("tmpclient: not implemented")
-
 var (
 	_ deco.Client     = (*Client)(nil)
 	_ deco.WiFiWriter = (*Client)(nil)

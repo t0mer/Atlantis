@@ -108,13 +108,12 @@ func config(o Options, hostKey ssh.HostKeyCallback) *ssh.ClientConfig {
 		banner = tpsBanner
 	}
 	return &ssh.ClientConfig{
-		User:            o.User,
-		Auth:            []ssh.AuthMethod{ssh.Password(o.Password)},
-		HostKeyCallback: hostKey,
-		HostKeyAlgorithms: append(append([]string(nil), def.HostKeys...),
-			ssh.KeyAlgoRSA, ssh.InsecureKeyAlgoDSA),
-		ClientVersion: banner,
-		Timeout:       o.Timeout,
+		User:              o.User,
+		Auth:              []ssh.AuthMethod{ssh.Password(o.Password)},
+		HostKeyCallback:   hostKey,
+		HostKeyAlgorithms: append(append([]string(nil), def.HostKeys...), ssh.KeyAlgoRSA),
+		ClientVersion:     banner,
+		Timeout:           o.Timeout,
 		Config: ssh.Config{
 			KeyExchanges: append(append([]string(nil), def.KeyExchanges...), ins.KeyExchanges...),
 			Ciphers:      append(append([]string(nil), def.Ciphers...), ins.Ciphers...),
