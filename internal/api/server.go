@@ -209,6 +209,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, session.ErrClosed):
+		writeError(w, http.StatusConflict, "the Deco connection changed while this was running; try again")
 	case errors.Is(err, session.ErrPaused), errors.Is(err, session.ErrBlocked), errors.Is(err, session.ErrStopped):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, deco.ErrUnsupported):

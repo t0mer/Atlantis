@@ -18,6 +18,7 @@ import (
 	"github.com/t0mer/atlantis/internal/events"
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
+	"github.com/t0mer/atlantis/internal/session"
 	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
 )
@@ -356,7 +357,7 @@ func (s *Server) patchWiFi(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, deco.ErrInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
-	case errors.Is(err, deco.ErrUnsupported):
+	case errors.Is(err, deco.ErrUnsupported), errors.Is(err, session.ErrClosed):
 		s.fail(w, err)
 		return
 	default:
@@ -710,7 +711,12 @@ func (s *Server) acceptHostKey(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Site.Current().Session.Status())
+	cur := s.Site.Current()
+	if cur == nil {
+		s.fail(w, site.ErrNoDeco)
+		return
+	}
+	writeJSON(w, http.StatusOK, cur.Session.Status())
 }
 
 func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
