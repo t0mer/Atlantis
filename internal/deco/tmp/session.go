@@ -79,6 +79,10 @@ type Options struct {
 	Heartbeat time.Duration
 	// Timeout bounds each request (default 30s, as in the app).
 	Timeout time.Duration
+	// Associate runs the TMP version association first: send
+	// 01 01 01 00, wait for 01 01 02 xx, acknowledge with 01 01 02 00
+	// (tmp/h0.java). The app's TMP-V1 layer skips it on some paths.
+	Associate bool
 }
 
 // Session is an AppV2 session over a TMP byte stream. Requests are
@@ -94,6 +98,7 @@ type Session struct {
 
 	wmu      sync.Mutex // serialises frame writes (requests vs heartbeat)
 	in       chan Packet
+	assoc    chan struct{} // receives on CtrlAssocAccept
 	deadCh   chan struct{} // closed on the first fatal error
 	deadOnce sync.Once
 	closing  chan struct{} // closed when Close starts; aborts waiting requests
@@ -117,10 +122,17 @@ func Open(ctx context.Context, conn io.ReadWriteCloser, opts Options) (*Session,
 	s := &Session{
 		conn: conn, opts: opts, in: make(chan Packet, 64),
 		deadCh: make(chan struct{}), closing: make(chan struct{}), done: make(chan struct{}),
+		assoc: make(chan struct{}, 1),
 	}
 	go s.readLoop()
 	if opts.Heartbeat > 0 {
 		go s.heartbeatLoop()
+	}
+	if opts.Associate {
+		if err := s.associate(ctx); err != nil {
+			s.Close()
+			return nil, nil, err
+		}
 	}
 	if err := s.alloc(ctx); err != nil {
 		s.Close()
@@ -140,6 +152,22 @@ func Open(ctx context.Context, conn io.ReadWriteCloser, opts Options) (*Session,
 		return nil, nil, fmt.Errorf("negotiating components: %w", err)
 	}
 	return s, neg, nil
+}
+
+func (s *Session) associate(ctx context.Context) error {
+	if err := s.writeFrame(Frame{Ctrl: CtrlAssocRequest}); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.opts.Timeout)
+	defer cancel()
+	select {
+	case <-s.assoc:
+	case <-s.deadCh:
+		return s.deadErr()
+	case <-ctx.Done():
+		return fmt.Errorf("tmp: version association: %w", ctx.Err())
+	}
+	return s.writeFrame(Frame{Ctrl: CtrlAssocAccept})
 }
 
 func (s *Session) alloc(ctx context.Context) error {
@@ -294,7 +322,10 @@ func (s *Session) writeFrame(f Frame) error {
 		return err
 	}
 	s.touch()
-	_, err = s.conn.Write(b)
+	if _, err = s.conn.Write(b); err != nil {
+		err = fmt.Errorf("tmp: writing: %w", err)
+		s.fail(err) // a broken stream is fatal, whichever side notices first
+	}
 	return err
 }
 
@@ -322,7 +353,12 @@ func (s *Session) readLoop() {
 			return
 		}
 		switch f.Ctrl {
-		case CtrlHeartbeat, CtrlAssocAccept:
+		case CtrlHeartbeat:
+		case CtrlAssocAccept:
+			select {
+			case s.assoc <- struct{}{}:
+			default:
+			}
 		case CtrlAssocRefuse:
 			s.fail(errors.New("tmp: device refused the session (version association)"))
 			return

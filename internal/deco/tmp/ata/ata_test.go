@@ -16,14 +16,17 @@ import (
 // echoRelay is a relay whose device echoes every received byte, uppercased,
 // on the next TRANSFER response.
 type echoRelay struct {
-	mu        sync.Mutex
-	methods   []string
-	lastSN    int64
-	pending   []byte
-	tokens    []string
-	errCode   int
-	badSN     bool
-	connected bool
+	mu              sync.Mutex
+	methods         []string
+	lastSN          int64
+	pending         []byte
+	tokens          []string
+	errCode         int
+	badSN           bool
+	connected       bool
+	notJoined       int // answer the first TRANSFER after this many CONNECTs with err_code 4
+	sawData         bool
+	emptyBeforeData bool
 }
 
 func (r *echoRelay) Token() string { return "acct" }
@@ -45,7 +48,20 @@ func (r *echoRelay) Passthrough(_ context.Context, url, dev string, req any) (js
 			return nil, errors.New("CONNECT without type TMP")
 		}
 		r.connected = true
+		r.lastSN = 0
 	case "TRANSFER":
+		if m["raw_data"].(string) == "" && !r.sawData {
+			r.emptyBeforeData = true
+		}
+		if m["raw_data"].(string) != "" {
+			r.sawData = true
+		}
+		if r.notJoined > 0 {
+			r.notJoined--
+			r.connected = false
+			b, _ := json.Marshal(map[string]any{"err_code": 4})
+			return b, nil
+		}
 		if !r.connected {
 			return nil, errors.New("TRANSFER before CONNECT")
 		}
@@ -66,7 +82,7 @@ func (r *echoRelay) Passthrough(_ context.Context, url, dev string, req any) (js
 
 func dial(t *testing.T, r *echoRelay) *Conn {
 	t.Helper()
-	c, err := Dial(context.Background(), r, "https://relay.example", "dev-1")
+	c, err := Dial(context.Background(), r, "https://relay.example", "dev-1", t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,5 +186,61 @@ func TestCloseFlushesQueuedBytes(t *testing.T) {
 	}
 	if r.methods[len(r.methods)-1] != "DISCONNECT" {
 		t.Fatalf("lifecycle: %v", r.methods)
+	}
+}
+
+func TestReconnectsAndResendsWhenDeviceNotJoined(t *testing.T) {
+	connectBackoff = time.Millisecond
+	r := &echoRelay{notJoined: 2}
+	c := dial(t, r)
+	defer c.Close()
+	c.Write([]byte("ok"))
+	got := make([]byte, 2)
+	if _, err := io.ReadFull(c, got); err != nil || string(got) != "OK" {
+		t.Fatalf("%q %v", got, err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, m := range r.methods {
+		if m == "CONNECT" {
+			n++
+		}
+	}
+	if n != 3 || r.badSN {
+		t.Fatalf("want 3 CONNECTs and ordered sn, got %d (%v)", n, r.methods)
+	}
+	if r.emptyBeforeData {
+		t.Fatal("an empty TRANSFER went out before the first data, unlike the app")
+	}
+}
+
+func TestGivesUpAfterAttempts(t *testing.T) {
+	connectBackoff = time.Millisecond
+	r := &echoRelay{notJoined: 99}
+	c := dial(t, r)
+	defer c.Close()
+	c.Write([]byte("x"))
+	_, err := c.Read(make([]byte, 1))
+	var re RelayError
+	if !errors.As(err, &re) || re.Code != 4 || !strings.Contains(err.Error(), "3 attempts") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+type rejectingRelay struct{}
+
+func (rejectingRelay) Token() string { return "acct" }
+func (rejectingRelay) Passthrough(context.Context, string, string, any) (json.RawMessage, error) {
+	return json.RawMessage(`{"error_code":-1002}`), nil
+}
+
+// Seen live: a Deco whose cloud agent does not know CONNECT answers with
+// error_code, not err_code. That must be a failure, not a success.
+func TestDeviceErrorCodeIsNotSuccess(t *testing.T) {
+	_, err := Dial(context.Background(), rejectingRelay{}, "https://relay.example", "dev-1", t.Logf)
+	var de DeviceError
+	if !errors.As(err, &de) || de.Code != -1002 || !strings.Contains(err.Error(), "unknown method") {
+		t.Fatalf("got %v", err)
 	}
 }

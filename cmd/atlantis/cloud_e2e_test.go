@@ -132,3 +132,17 @@ func TestTerminalIDIsStable(t *testing.T) {
 		t.Fatalf("unstable or wrong perms: %s %s %v", a, b, st.Mode())
 	}
 }
+
+func TestDefaultCAFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	if got := defaultCAFile(); got != "" {
+		t.Fatalf("no file yet, got %q", got)
+	}
+	p := filepath.Join(dir, "atlantis", caFileName)
+	os.MkdirAll(filepath.Dir(p), 0o700)
+	os.WriteFile(p, []byte("x"), 0o600)
+	if got := defaultCAFile(); got != p {
+		t.Fatalf("got %q, want %q", got, p)
+	}
+}

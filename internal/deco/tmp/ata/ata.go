@@ -50,13 +50,48 @@ var errCodes = map[int]string{
 // ErrClosed is returned after Close or a fatal relay error.
 var ErrClosed = errors.New("ata: connection closed")
 
+// RelayError is a non-success inner err_code.
+type RelayError struct{ Code int }
+
+func (e RelayError) Error() string {
+	msg := errCodes[e.Code]
+	if msg == "" {
+		msg = "relay error"
+	}
+	return fmt.Sprintf("%s (err_code %d)", msg, e.Code)
+}
+
+// DeviceError is an error_code from the Deco's cloud agent: the device
+// received the request and rejected it.
+type DeviceError struct{ Code int }
+
+func (e DeviceError) Error() string {
+	if e.Code == -1002 {
+		return "the Deco does not support this relay request (error_code -1002, unknown method)"
+	}
+	return fmt.Sprintf("the Deco rejected the relay request (error_code %d)", e.Code)
+}
+
+const (
+	codeNotConnected = 4
+	// The app rebuilds the client with a new token and retries once on a
+	// connect failure; we allow a few attempts with a pause, since the
+	// device may need a moment to join the tunnel.
+	connectAttempts = 3
+)
+
+// connectBackoff is the pause before the second connect attempt (doubled
+// for the third). A variable so tests can shorten it.
+var connectBackoff = 2 * time.Second
+
 // Conn is a TMP byte stream over the relay. Read and Write may be called
 // from different goroutines.
 type Conn struct {
 	relay     Relay
 	serverURL string
 	deviceID  string
-	suffix    int64
+	token     string // account token + suffix, fixed per connection as in the app
+	logf      func(format string, args ...any)
 
 	mu      sync.Mutex
 	cond    *sync.Cond
@@ -66,6 +101,7 @@ type Conn struct {
 	err     error     // terminal error
 	closed  bool
 	drain   bool // Close is flushing queued bytes before DISCONNECT
+	joined  bool // a TRANSFER has succeeded; only the loop goroutine uses it
 	sn      int64
 	kick    chan struct{}
 	done    chan struct{}
@@ -73,36 +109,57 @@ type Conn struct {
 }
 
 type response struct {
-	ErrCode int    `json:"err_code"`
-	SN      int64  `json:"sn"`
-	RawData string `json:"raw_data"`
+	ErrCode int `json:"err_code"`
+	// ErrorCode is set instead of err_code when the Deco's cloud agent
+	// rejects the request itself (JSON-RPC style, e.g. -1002 unknown method).
+	ErrorCode int    `json:"error_code"`
+	SN        int64  `json:"sn"`
+	RawData   string `json:"raw_data"`
 }
 
-// Dial opens a TMP channel to the device and starts the transfer loop.
-func Dial(ctx context.Context, relay Relay, serverURL, deviceID string) (*Conn, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(16))
-	if err != nil {
-		return nil, err
+// Dial sends CONNECT and starts the transfer loop. As in the app, the
+// first TRANSFER carries the first TMP bytes written (the session's
+// TOKEN_ALLOC); no empty poll goes out before that. If the relay answers it
+// with "device not connected", the connection is rebuilt with a new token
+// and the same bytes are resent, up to connectAttempts times. logf, if
+// non-nil, receives relay status lines (codes only, never tokens or data).
+func Dial(ctx context.Context, relay Relay, serverURL, deviceID string, logf func(string, ...any)) (*Conn, error) {
+	if logf == nil {
+		logf = func(string, ...any) {}
 	}
 	c := &Conn{
-		relay: relay, serverURL: serverURL, deviceID: deviceID, suffix: n.Int64(),
+		relay: relay, serverURL: serverURL, deviceID: deviceID, logf: logf,
 		kick: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}),
 	}
 	c.cond = sync.NewCond(&c.mu)
-	if _, err := c.send(ctx, map[string]any{"method": "CONNECT", "type": "TMP"}); err != nil {
-		return nil, fmt.Errorf("ata: connect: %w", err)
+	if err := c.connect(ctx, 1); err != nil {
+		return nil, err
 	}
 	go c.loop()
 	return c, nil
 }
 
-// token is the relay token: the account token plus a per-connection suffix
-// (ata/context/j.java). The account token is read on every request so a
-// cloud re-login is picked up.
-func (c *Conn) token() string { return fmt.Sprintf("%s-%d", c.relay.Token(), c.suffix) }
+// connect picks a new token suffix and sends CONNECT. sn restarts at 1.
+func (c *Conn) connect(ctx context.Context, attempt int) error {
+	n, err := rand.Int(rand.Reader, big.NewInt(16))
+	if err != nil {
+		return err
+	}
+	c.token = fmt.Sprintf("%s-%d", c.relay.Token(), n.Int64())
+	r, err := c.send(ctx, map[string]any{"method": "CONNECT", "type": "TMP"})
+	if err != nil {
+		c.logf("relay CONNECT attempt %d: %v", attempt, err)
+		return fmt.Errorf("ata: connect: %w", err)
+	}
+	c.logf("relay CONNECT attempt %d: err_code %d", attempt, r.ErrCode)
+	c.mu.Lock()
+	c.sn = 0
+	c.mu.Unlock()
+	return nil
+}
 
 func (c *Conn) send(ctx context.Context, req map[string]any) (*response, error) {
-	req["token"] = c.token()
+	req["token"] = c.token
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	raw, err := c.relay.Passthrough(ctx, c.serverURL, c.deviceID, req)
@@ -118,12 +175,11 @@ func (c *Conn) send(ctx context.Context, req map[string]any) (*response, error) 
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, fmt.Errorf("malformed relay response: %w", err)
 	}
+	if r.ErrorCode != 0 {
+		return &r, DeviceError{Code: r.ErrorCode}
+	}
 	if r.ErrCode != 0 && r.ErrCode != 1 {
-		msg := errCodes[r.ErrCode]
-		if msg == "" {
-			msg = "relay error"
-		}
-		return nil, fmt.Errorf("%s (err_code %d)", msg, r.ErrCode)
+		return &r, RelayError{Code: r.ErrCode}
 	}
 	return &r, nil
 }
@@ -234,6 +290,16 @@ func (c *Conn) loop() {
 			return
 		}
 		ready, wait := c.due()
+		if !ready && !c.joined && wait < 0 {
+			// Before the first data exchange the app sends nothing: wait
+			// for the session's first write.
+			select {
+			case <-c.done:
+				return
+			case <-c.kick:
+				continue
+			}
+		}
 		if !ready {
 			d := jitter(poll)
 			if wait >= 0 && wait < d {
@@ -267,13 +333,41 @@ func (c *Conn) loop() {
 			case <-ctx.Done():
 			}
 		}()
-		r, err := c.send(ctx, map[string]any{
-			"method": "TRANSFER", "sn": sn, "raw_data": base64.StdEncoding.EncodeToString(batch),
-		})
+		raw := base64.StdEncoding.EncodeToString(batch)
+		r, err := c.send(ctx, map[string]any{"method": "TRANSFER", "sn": sn, "raw_data": raw})
+		for attempt := 2; err != nil && !c.joined && attempt <= connectAttempts; attempt++ {
+			var re RelayError
+			if !errors.As(err, &re) || re.Code != codeNotConnected {
+				break
+			}
+			c.logf("relay TRANSFER sn=%d (%d bytes): device not connected; reconnecting", sn, len(batch))
+			select {
+			case <-ctx.Done():
+			case <-time.After(connectBackoff * time.Duration(attempt-1)):
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			if err = c.connect(ctx, attempt); err != nil {
+				break
+			}
+			c.mu.Lock()
+			c.sn++
+			sn = c.sn
+			c.mu.Unlock()
+			r, err = c.send(ctx, map[string]any{"method": "TRANSFER", "sn": sn, "raw_data": raw})
+		}
 		cancel()
 		if err != nil {
+			if !c.joined {
+				err = fmt.Errorf("%w (after %d attempts; is the Deco online and reachable by the app?)", err, connectAttempts)
+			}
 			c.fail(err)
 			return
+		}
+		if !c.joined {
+			c.joined = true
+			c.logf("relay TRANSFER sn=%d: err_code %d (device answered)", sn, r.ErrCode)
 		}
 		data, err := base64.StdEncoding.DecodeString(r.RawData)
 		if err != nil {

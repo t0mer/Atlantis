@@ -18,12 +18,13 @@ import (
 
 	"github.com/t0mer/atlantis/internal/deco/cloud"
 	"github.com/t0mer/atlantis/internal/deco/fixture"
+	"github.com/t0mer/atlantis/internal/deco/tmpclient"
 	"github.com/t0mer/atlantis/internal/tplinkcloud"
 )
 
 type cloudProbeOptions struct {
 	email, site, dumpDir, terminalFile, caFile string
-	dump                                       bool
+	dump, debug                                bool
 
 	// Set by tests only; there are no flags for these.
 	bootstrapURL string
@@ -69,6 +70,9 @@ replaced), as a test fixture.`,
 				return errors.New("no TP-Link ID: use --email or ATLANTIS_CLOUD_EMAIL")
 			}
 			o.password = os.Getenv("ATLANTIS_CLOUD_PASSWORD")
+			if o.caFile == "" {
+				o.caFile = defaultCAFile()
+			}
 			o.in, o.out, o.errOut = os.Stdin, os.Stdout, os.Stderr
 			return runCloudProbe(cmd.Context(), o)
 		},
@@ -77,9 +81,10 @@ replaced), as a test fixture.`,
 	f.StringVar(&o.email, "email", "", "TP-Link ID email (or ATLANTIS_CLOUD_EMAIL)")
 	f.StringVar(&o.site, "site", "", "site ID from the list to read; omit to only list sites")
 	f.BoolVar(&o.dump, "dump", false, "write sanitised response fixtures (needs --site)")
+	f.BoolVar(&o.debug, "debug", false, "print cloud relay status codes (never tokens or data)")
 	f.StringVar(&o.dumpDir, "dump-dir", "internal/deco/cloud/testdata", "directory for --dump fixtures")
 	f.StringVar(&o.terminalFile, "terminal-file", "", "where the installation's terminal ID is kept (default: user config dir)")
-	f.StringVar(&o.caFile, "ca-file", "", "extra PEM root certificates for the cloud TLS connection")
+	f.StringVar(&o.caFile, "ca-file", "", "extra PEM root certificates for the cloud TLS connection (default: "+caFileName+" in the user config dir, if present)")
 	return cmd
 }
 
@@ -103,6 +108,9 @@ func runCloudProbe(ctx context.Context, o cloudProbeOptions) error {
 		}
 		opts.RootCAs = pool
 	}
+	if o.caFile != "" {
+		fmt.Fprintf(o.errOut, "using CA certificates from %s\n", o.caFile)
+	}
 	acct, err := tplinkcloud.New(opts)
 	if err != nil {
 		return fmt.Errorf("%w (set ATLANTIS_CLOUD_ACCESS_KEY and ATLANTIS_CLOUD_SECRET)", err)
@@ -114,12 +122,20 @@ func runCloudProbe(ctx context.Context, o cloudProbeOptions) error {
 		}
 	}
 	if err := cloudLogin(ctx, acct, o, in); err != nil {
+		if strings.Contains(err.Error(), "certificate signed by unknown authority") {
+			return fmt.Errorf("%w\n(TP-Link's cloud uses its own root CA: put it in %s, or pass --ca-file)", err, caFileName)
+		}
 		return err
 	}
 
 	sites, err := acct.Sites(ctx)
 	if err != nil {
 		return err
+	}
+	if o.debug {
+		for _, st := range sites {
+			fmt.Fprintf(o.errOut, "debug: site %s: accessPlatform=%q operation_mode=%q\n", st.Name, st.AccessPlatform, st.OperationMode)
+		}
 	}
 	if o.site == "" {
 		printSites(o.out, sites)
@@ -194,6 +210,9 @@ type cloudStep struct {
 // probeSite connects to one site and runs every allowlisted read.
 func probeSite(ctx context.Context, acct *tplinkcloud.Client, site tplinkcloud.Site, o cloudProbeOptions) error {
 	c := cloud.New(acct, site)
+	if o.debug {
+		c.SetDebug(func(f string, a ...any) { fmt.Fprintf(o.errOut, "debug: "+f+"\n", a...) })
+	}
 	if err := c.Login(ctx); err != nil {
 		return fmt.Errorf("connecting to %s through the cloud: %w", site.Name, err)
 	}
@@ -202,7 +221,20 @@ func probeSite(ctx context.Context, acct *tplinkcloud.Client, site tplinkcloud.S
 			fmt.Fprintf(o.errOut, "disconnect: %v\n", err)
 		}
 	}()
+	return readSession(ctx, c, sessionOutput{out: o.out, errOut: o.errOut, dump: o.dump, dumpDir: o.dumpDir})
+}
 
+// sessionOutput is where readSession prints and dumps.
+type sessionOutput struct {
+	out, errOut io.Writer
+	dump        bool
+	dumpDir     string
+}
+
+// readSession runs every allowlisted read on an open session client, prints
+// the redacted results as JSON and optionally dumps sanitised fixtures. It
+// is shared by the cloud and SSH probes.
+func readSession(ctx context.Context, c *tmpclient.Client, o sessionOutput) error {
 	out := map[string]any{}
 	if neg, err := fixture.Redact(c.Negotiation()); err == nil {
 		out["COMP_NEGOTIATE"] = neg
@@ -210,7 +242,7 @@ func probeSite(ctx context.Context, acct *tplinkcloud.Client, site tplinkcloud.S
 	results := map[string]json.RawMessage{}
 	var failed []string
 	run := func(s cloudStep) {
-		raw, err := c.RawParams(ctx, cloud.RawArea, s.op, s.params)
+		raw, err := c.RawParams(ctx, tmpclient.RawArea, s.op, s.params)
 		if err != nil {
 			out[s.file] = map[string]string{"error": err.Error()}
 			failed = append(failed, s.file)
@@ -255,7 +287,7 @@ func probeSite(ctx context.Context, acct *tplinkcloud.Client, site tplinkcloud.S
 		}
 	}
 	if len(failed) > 0 {
-		return fmt.Errorf("cloud probe: %d step(s) failed: %s", len(failed), strings.Join(failed, ", "))
+		return fmt.Errorf("probe: %d step(s) failed: %s", len(failed), strings.Join(failed, ", "))
 	}
 	return nil
 }
@@ -299,11 +331,29 @@ func dumpCloudFixtures(dir string, results map[string]json.RawMessage) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", n, err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "cloud_"+strings.ToLower(n)+".json"), append(clean, '\n'), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "tmp_"+strings.ToLower(n)+".json"), append(clean, '\n'), 0o644); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// caFileName is the TP-Link cloud CA bundle looked for in the user config
+// dir. TP-Link's cloud chains to its own root, which system stores lack.
+const caFileName = "tplink-cloud-ca.pem"
+
+// defaultCAFile returns <config dir>/atlantis/tplink-cloud-ca.pem if it
+// exists, else "".
+func defaultCAFile() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(dir, "atlantis", caFileName)
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
 }
 
 // loadTerminalID returns the persisted terminal UUID, creating it once. The

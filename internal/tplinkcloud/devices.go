@@ -29,6 +29,9 @@ type Site struct {
 	Online         bool
 	Owner          bool // the account owns the site (vs. shared with it)
 	OperationMode  string
+	// AccessPlatform is the cloud platform the master is on. The app's ATA
+	// relay is only used for UNKNOWN/BASIC (mesh/context/c.java F9()).
+	AccessPlatform string
 	Nodes          []Node
 }
 
@@ -53,6 +56,7 @@ type cloudDevice struct {
 	AppServerURLV2 string `json:"appServerUrlV2"`
 	Role           int    `json:"role"`
 	Status         int    `json:"status"`
+	AccessPlatform string `json:"accessPlatform"`
 }
 
 func (d cloudDevice) serverURL() string {
@@ -167,11 +171,20 @@ func (c *Client) Sites(ctx context.Context) ([]Site, error) {
 // "master" (or that has no feature data) roots a site, and the satellites in
 // its re_list become its nodes (l1.java B0()).
 func buildSites(devs []cloudDevice, feats map[string]feature) []Site {
+	satellite := map[string]bool{}
+	for _, f := range feats {
+		for _, re := range f.Data.ReList {
+			satellite[re.DeviceID] = true
+		}
+	}
 	var sites []Site
 	for _, d := range devs {
 		f, ok := feats[d.DeviceID]
 		if ok && f.Data.Role != "" && !strings.EqualFold(f.Data.Role, "master") {
 			continue // satellites are listed under their master
+		}
+		if satellite[d.DeviceID] && !strings.EqualFold(f.Data.Role, "master") {
+			continue // a satellite without its own mesh data
 		}
 		s := Site{
 			ID:             f.Data.GroupID,
@@ -181,9 +194,10 @@ func buildSites(devs []cloudDevice, feats map[string]feature) []Site {
 			Online:         d.Status == 1,
 			Owner:          d.Role == 0,
 			OperationMode:  f.TMPData.OperationMode,
+			AccessPlatform: d.AccessPlatform,
 			Nodes: []Node{{
 				DeviceID: d.DeviceID, MAC: normalizeMAC(d.DeviceMAC), Model: d.DeviceModel,
-				Name: firstNonEmpty(d.Alias, d.DeviceName), Master: true,
+				Name: firstNonEmpty(decodeB64(d.Alias), decodeB64(d.DeviceName)), Master: true,
 			}},
 		}
 		if s.ID == "" {
