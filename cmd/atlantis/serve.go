@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -124,6 +125,10 @@ func (h *hostKeys) accept() {
 }
 
 func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	// Shoutrrr uses http.DefaultClient, which has no timeout; bound it so an
+	// abandoned notification send cannot hang for ever.
+	http.DefaultClient.Timeout = 30 * time.Second
+
 	box, err := secret.New(cfg.SecretKey)
 	if err != nil {
 		return err
@@ -157,7 +162,15 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	if keys.pin == "" {
 		keys.acceptNew = true // first start: trust and store the key the Deco presents (TOFU)
 	}
-	client, err := newDecoClient(ctx, cfg, password, keys, netw.TLSPin, log)
+	saveTLSPin := func(fp string) {
+		if netw.TLSPin == "" { // trust on first use, then keep it
+			netw.TLSPin = fp
+			if err := st.SetTLSPin(context.Background(), netw.ID, fp); err != nil {
+				log.Error("saving the TLS pin", "err", err)
+			}
+		}
+	}
+	client, err := newDecoClient(ctx, cfg, password, keys, netw.TLSPin, saveTLSPin, log)
 	if err != nil {
 		return err
 	}
@@ -169,15 +182,19 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		metricsHandler = m.Handler()
 	}
 	hub := poller.NewHub()
+	var stateMu sync.Mutex
 	var lastState session.State
 	sess := session.New(client, func(s session.Status) {
 		hub.Publish(poller.Message{Kind: "session", Data: s})
-		if m != nil && s.State == session.StateConnected && lastState != session.StateConnected {
+		stateMu.Lock()
+		prev := lastState
+		lastState = s.State
+		stateMu.Unlock()
+		if m != nil && s.State == session.StateConnected && prev != session.StateConnected {
 			m.Login("ok")
-		} else if m != nil && s.State == session.StateAuthFailed {
+		} else if m != nil && s.State == session.StateAuthFailed && prev != session.StateAuthFailed {
 			m.Login("auth_failed")
 		}
-		lastState = s.State
 		log.Info("deco session", "state", s.State, "error", s.Error)
 	})
 	defer sess.Close(context.Background())
@@ -203,10 +220,21 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	srv := api.New(api.Deps{Config: cfg, Store: st, NetworkID: netw.ID, Session: sess, Poller: p, Hub: hub, Notify: disp,
 		Metrics: metricsHandler, Web: web.Handler(), Version: version, Log: log,
 		AcceptHostKey: func(context.Context) error {
+			if cfg.Deco.Transport == "luci" {
+				// The local web client pins in memory; clear the stored pin
+				// so a restart trusts the device's current certificate.
+				netw.TLSPin = ""
+				if err := st.SetTLSPin(context.Background(), netw.ID, ""); err != nil {
+					return err
+				}
+				return api.ErrRestartRequired
+			}
 			keys.accept()
 			return st.SetHostKey(context.Background(), netw.ID, "")
 		}})
-	httpSrv := &http.Server{Addr: cfg.Server.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	// Request contexts end with ctx, so live streams stop on shutdown.
+	httpSrv := &http.Server{Addr: cfg.Server.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
+		BaseContext: func(net.Listener) context.Context { return ctx }}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -238,7 +266,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 // (trust on first use, CLAUDE.md §5.1); later a different key stops the
 // session until it is accepted through the API. deco.host_key pins one up
 // front.
-func newDecoClient(ctx context.Context, cfg *config.Config, password string, keys *hostKeys, tlsPin string, log *slog.Logger) (deco.Client, error) {
+func newDecoClient(ctx context.Context, cfg *config.Config, password string, keys *hostKeys, tlsPin string, saveTLSPin func(string), log *slog.Logger) (deco.Client, error) {
 	switch cfg.Deco.Transport {
 	case "luci":
 		base := cfg.Deco.Host
@@ -246,7 +274,8 @@ func newDecoClient(ctx context.Context, cfg *config.Config, password string, key
 			base = "http://" + base
 		}
 		return luci.New(base, password, luci.Options{Pin: tlsPin, OnFingerprint: func(fp string) {
-			log.Warn("trusting the Deco's TLS certificate on first use; pin it with deco.tls_pin", "fingerprint", fp)
+			log.Warn("trusting the Deco's TLS certificate on first use", "fingerprint", fp)
+			saveTLSPin(fp)
 		}})
 	}
 

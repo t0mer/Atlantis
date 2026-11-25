@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -121,5 +122,18 @@ func TestLoggerRedactsSecrets(t *testing.T) {
 	out := b.String()
 	if strings.Contains(out, "hunter2") || strings.Contains(out, `"k"`) || !strings.Contains(out, "192.0.2.1") {
 		t.Fatal(out)
+	}
+}
+
+// Review finding: the healthcheck must follow server.listen from the YAML.
+func TestHealthListenFromYAML(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a.yaml")
+	os.WriteFile(p, []byte("server:\n  listen: \":9090\"\n"), 0o600)
+	t.Setenv("ATLANTIS_SERVER_LISTEN", "")
+	if got := healthListen(p); got != ":9090" {
+		t.Fatalf("got %q", got)
+	}
+	if got := healthListen(""); got != ":8080" {
+		t.Fatalf("default %q", got)
 	}
 }
