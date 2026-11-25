@@ -11,6 +11,9 @@ info:
     `/api/v1/auth/*` needs the cookie; every non-GET request also needs the
     `X-CSRF-Token` header.
 
+    **Metrics.** `/metrics` (Prometheus) needs `Authorization: Bearer <metrics.token>`,
+    or a logged-in session when no token is configured. It is never public.
+
     **Writes.** Only actions verified on a real Deco are performed: changing the
     main Wi-Fi SSID and password. Reboot and Wi-Fi on/off answer `501` until
     they are verified. Secrets (passwords, channel URLs and tokens) are

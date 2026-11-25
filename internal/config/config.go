@@ -68,6 +68,9 @@ type Metrics struct {
 	Enabled   bool   `mapstructure:"enabled"`
 	Path      string `mapstructure:"path"`
 	PerClient string `mapstructure:"per_client"` // all, watched, none
+	// Token is the bearer token Prometheus sends to scrape metrics. Without
+	// one, metrics need a logged-in session (they are never public).
+	Token string `mapstructure:"token"`
 }
 
 type Notify struct {
@@ -117,7 +120,7 @@ var keys = []string{
 	"deco.transport", "deco.host", "deco.port", "deco.email", "deco.password", "deco.host_key", "deco.tls_pin",
 	"poll.fast", "poll.slow", "poll.offline_after_misses",
 	"store.path", "store.raw_retention", "store.rollup_retention",
-	"metrics.enabled", "metrics.path", "metrics.per_client",
+	"metrics.enabled", "metrics.path", "metrics.per_client", "metrics.token",
 	"notify.quiet_hours", "notify.timezone",
 	"openwa.url", "openwa.api_key", "openwa.default_chat",
 	"debug.enabled", "log.level", "log.format", "secret_key",

@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -67,7 +68,8 @@ func (s *Server) Handler() http.Handler {
 	r.Use(middleware.Recoverer, securityHeaders)
 	r.Get("/health", s.health)
 	if s.Metrics != nil {
-		r.Handle(s.Config.Metrics.Path, s.Metrics)
+		// Metrics carry client names and MACs: never public.
+		r.Handle(s.Config.Metrics.Path, s.metricsAuth(s.Metrics))
 	}
 	r.Get("/api/docs", docsPage)
 	r.Get("/api/openapi.yaml", openAPISpec)
@@ -116,6 +118,27 @@ func (s *Server) Handler() http.Handler {
 		r.Handle("/*", s.Web)
 	}
 	return r
+}
+
+// metricsAuth admits a matching bearer token (for Prometheus) when
+// metrics.token is set, and otherwise a logged-in session.
+func (s *Server) metricsAuth(next http.Handler) http.Handler {
+	tok := s.Config.Metrics.Token
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tok != "" {
+			got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if ok && subtle.ConstantTimeCompare([]byte(got), []byte(tok)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		if _, ok := s.currentSession(r); ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="atlantis-metrics"`)
+		writeError(w, http.StatusUnauthorized, "metrics need a bearer token or a login")
+	})
 }
 
 func securityHeaders(next http.Handler) http.Handler {

@@ -201,7 +201,7 @@ func TestReadEndpoints(t *testing.T) {
 		t.Fatal("unknown node")
 	}
 	if code, _, body := e.do(t, "GET", "/metrics", "", false); code != 200 || !strings.Contains(body, "deco_node_up") {
-		t.Fatal("metrics")
+		t.Fatal("metrics for a logged-in user")
 	}
 	if code, _, _ := e.do(t, "GET", "/api/v1/debug/raw?area=tmp&form=DEVICE_LIST_GET", "", false); code != 200 {
 		t.Fatal("debug raw")
@@ -347,5 +347,31 @@ func TestSpecMatchesRouter(t *testing.T) {
 	sort.Strings(specRoutes)
 	if strings.Join(routes, "\n") != strings.Join(specRoutes, "\n") {
 		t.Fatalf("router:\n%s\n\nspec:\n%s", strings.Join(routes, "\n"), strings.Join(specRoutes, "\n"))
+	}
+}
+
+// Metrics expose client names and MACs, so they are never public.
+func TestMetricsNeedAuth(t *testing.T) {
+	e := newEnv(t)
+	resp, _ := http.Get(e.srv.URL + "/metrics") // no cookie
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("public metrics: %d", resp.StatusCode)
+	}
+}
+
+func TestMetricsBearerToken(t *testing.T) {
+	s := New(Deps{Config: &config.Config{Metrics: config.Metrics{Path: "/metrics", Token: "scrape-me"}}, Log: slog.Default(),
+		Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })})
+	for tok, want := range map[string]int{"scrape-me": 200, "wrong": 401, "": 401} {
+		req := httptest.NewRequest("GET", "/metrics", nil)
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		rr := httptest.NewRecorder()
+		s.metricsAuth(s.Metrics).ServeHTTP(rr, req)
+		if rr.Code != want {
+			t.Errorf("token %q: %d, want %d", tok, rr.Code, want)
+		}
 	}
 }
