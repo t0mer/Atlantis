@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 // Sentinel errors returned by Client implementations.
@@ -176,10 +177,70 @@ type Client interface {
 	Raw(ctx context.Context, area, form string) (json.RawMessage, error)
 }
 
-// WiFiWriter is implemented by transports that can change the main Wi-Fi
-// network (verified on hardware). SetHostWiFi returns the changed bands.
+// Wi-Fi fields a WirelessPatch can change, as named by WiFiWriter.Editable.
+const (
+	FieldEnable     = "enable"
+	FieldSSID       = "ssid"
+	FieldPassword   = "password"
+	FieldEncryption = "encryption"
+	FieldHidden     = "hidden"
+)
+
+// WirelessPatch changes one Wi-Fi network (the device's key: "host",
+// "guest" or "iot") on some or all bands. Nil fields stay as they are.
+type WirelessPatch struct {
+	Network    string   `json:"network"`
+	Bands      []string `json:"bands,omitempty"` // empty = every band that has the network
+	Enable     *bool    `json:"enable,omitempty"`
+	SSID       *string  `json:"ssid,omitempty"`
+	Password   *string  `json:"password,omitempty"`
+	Encryption *string  `json:"encryption,omitempty"`
+	Hidden     *bool    `json:"hidden,omitempty"`
+}
+
+// Fields lists the fields the patch changes.
+func (p WirelessPatch) Fields() []string {
+	var f []string
+	if p.Enable != nil {
+		f = append(f, FieldEnable)
+	}
+	if p.SSID != nil {
+		f = append(f, FieldSSID)
+	}
+	if p.Password != nil {
+		f = append(f, FieldPassword)
+	}
+	if p.Encryption != nil {
+		f = append(f, FieldEncryption)
+	}
+	if p.Hidden != nil {
+		f = append(f, FieldHidden)
+	}
+	return f
+}
+
+// ErrInvalid marks a request the device client refused before sending it.
+var ErrInvalid = errors.New("deco: invalid request")
+
+type invalidError struct{ msg string }
+
+func (e invalidError) Error() string { return e.msg }
+func (e invalidError) Unwrap() error { return ErrInvalid }
+
+// Invalid returns an error matching ErrInvalid with a plain message.
+func Invalid(format string, a ...any) error { return invalidError{fmt.Sprintf(format, a...)} }
+
+// ErrNotVerified means a write has not been verified on a real Deco yet,
+// so Atlantis does not send it.
+var ErrNotVerified = errors.New("deco: this change has not been verified on a Deco yet")
+
+// WiFiWriter is implemented by transports that can change Wi-Fi networks.
+// SetNetwork returns the changed bands; it refuses fields that Editable
+// does not list for the network with ErrNotVerified.
 type WiFiWriter interface {
-	SetHostWiFi(ctx context.Context, ssid, password string) ([]string, error)
+	SetNetwork(ctx context.Context, p WirelessPatch) ([]string, error)
+	// Editable maps a network key to the fields verified on hardware.
+	Editable() map[string][]string
 }
 
 // NormalizeBand maps the device-list/client naming ("band5") to the

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"unicode"
 	"unicode/utf8"
@@ -13,13 +14,57 @@ import (
 	"github.com/t0mer/atlantis/internal/deco/tmp"
 )
 
-// SetHostWiFi sets the main (host) network's SSID and password on every
-// known band that has one, keeping each band's other host settings as the
-// device reports them, then reads the settings back to confirm (the app
-// sends only the changed networks: MeshWirelessRepository H0/I0). Every
-// client on the main network is disconnected until it reconnects.
+// verifiedWrites are the Wi-Fi changes proven on a real Deco (an M5) with
+// `atlantis ssh wifi-probe`; SetNetwork refuses anything else. Add an entry
+// only after a probe of that exact network and field passes on hardware.
+var verifiedWrites = map[string][]string{
+	"host": {deco.FieldSSID, deco.FieldPassword},
+}
+
+// Editable reports the verified fields per network.
+func (c *Client) Editable() map[string][]string {
+	out := make(map[string][]string, len(verifiedWrites))
+	for k, v := range verifiedWrites {
+		out[k] = slices.Clone(v)
+	}
+	return out
+}
+
+// Encryption modes the Deco reports (WIRELESS_GET encryption_mode).
+var encryptionModes = []string{"none", "psk", "wpa2", "wpa2+wpa", "wpa3", "wpa2+wpa3"}
+
+// networks a patch may target; the device's keys.
+var patchNetworks = []string{"host", "guest", "iot"}
+
+// SetNetwork changes one Wi-Fi network: only fields verified on hardware.
+func (c *Client) SetNetwork(ctx context.Context, p deco.WirelessPatch) ([]string, error) {
+	for _, f := range p.Fields() {
+		if !slices.Contains(verifiedWrites[p.Network], f) {
+			return nil, fmt.Errorf("%w: %s %s", deco.ErrNotVerified, networkName(p.Network), f)
+		}
+	}
+	return c.setNetwork(ctx, p)
+}
+
+// ProbeNetwork is SetNetwork without the verified-writes check. It exists
+// for `atlantis ssh wifi-probe`, which proves a write on hardware before it
+// is added to verifiedWrites; nothing else may call it.
+func (c *Client) ProbeNetwork(ctx context.Context, p deco.WirelessPatch) ([]string, error) {
+	return c.setNetwork(ctx, p)
+}
+
+// SetHostWiFi sets the main network's SSID and password on every band.
 func (c *Client) SetHostWiFi(ctx context.Context, ssid, password string) ([]string, error) {
-	if err := validateHostWiFi(ssid, password); err != nil {
+	return c.SetNetwork(ctx, deco.WirelessPatch{Network: "host", SSID: &ssid, Password: &password})
+}
+
+// setNetwork reads the current settings, changes only the patched fields of
+// the one network on the chosen bands (keeping everything else as the
+// device reports it), sends just that network (the app sends only changed
+// networks: MeshWirelessRepository H0/I0), and reads back to confirm.
+// Devices on the network disconnect until they reconnect.
+func (c *Client) setNetwork(ctx context.Context, p deco.WirelessPatch) ([]string, error) {
+	if err := validatePatch(p); err != nil {
 		return nil, err
 	}
 	cur, err := c.Request(ctx, tmp.OpWirelessGet, nil)
@@ -30,25 +75,28 @@ func (c *Client) SetHostWiFi(ctx context.Context, ssid, password string) ([]stri
 	if !ok {
 		return nil, errors.New("tmpclient: Wi-Fi settings are not an object")
 	}
-	ssidB64 := base64.StdEncoding.EncodeToString([]byte(ssid))
-	passB64 := base64.StdEncoding.EncodeToString([]byte(password))
-	params := map[string]any{}
-	var changed []string
-	for _, band := range deco.Bands {
-		host, ok := deco.ParseObj(top.Obj(band)["host"])
-		if !ok {
-			continue
+	bands := p.Bands
+	if len(bands) == 0 {
+		for _, b := range deco.Bands {
+			if _, ok := deco.ParseObj(top.Obj(b)[p.Network]); ok {
+				bands = append(bands, b)
+			}
 		}
-		out := make(map[string]any, len(host))
-		for k, v := range host {
-			out[k] = v // keep the device's other host settings verbatim
-		}
-		out["ssid"], out["password"] = ssidB64, passB64
-		params[band] = map[string]any{"host": out}
-		changed = append(changed, band)
 	}
-	if len(changed) == 0 {
-		return nil, errors.New("tmpclient: the device reports no main Wi-Fi network to change")
+	if len(bands) == 0 {
+		return nil, fmt.Errorf("tmpclient: the device reports no %s Wi-Fi network", networkName(p.Network))
+	}
+	params := map[string]any{}
+	for _, band := range bands {
+		net, ok := deco.ParseObj(top.Obj(band)[p.Network])
+		if !ok {
+			return nil, deco.Invalid("%s has no %s network", band, networkName(p.Network))
+		}
+		out, err := applyPatch(net, p)
+		if err != nil {
+			return nil, deco.Invalid("%s: %s", band, err.Error())
+		}
+		params[band] = map[string]any{p.Network: out}
 	}
 	if _, err := c.request(ctx, tmp.OpWirelessSet, params); err != nil {
 		return nil, fmt.Errorf("setting Wi-Fi: %w", err)
@@ -59,19 +107,119 @@ func (c *Client) SetHostWiFi(ctx context.Context, ssid, password string) ([]stri
 		return nil, fmt.Errorf("the change was sent, but reading it back failed: %w", err)
 	}
 	check, _ := deco.ParseObj(after)
-	for _, band := range changed {
-		h := check.Obj(band).Obj("host")
-		if b64Text(h.Str("ssid")) != ssid || b64Text(h.Str("password")) != password {
-			return nil, fmt.Errorf("the device accepted the change but %s does not show it yet", band)
+	for _, band := range bands {
+		if err := confirm(check.Obj(band).Obj(p.Network), p); err != nil {
+			return nil, fmt.Errorf("the device accepted the change but %s %s", band, err)
 		}
 	}
-	sort.Strings(changed)
-	return changed, nil
+	sort.Strings(bands)
+	return bands, nil
 }
 
-// validateHostWiFi applies WPA2 limits: SSID 1-32 bytes of printable text,
-// passphrase 8-63 printable ASCII characters.
-func validateHostWiFi(ssid, password string) error {
+// applyPatch returns a copy of the device's network object with the patch
+// applied. A field the device does not report for this network is an error,
+// so Atlantis never invents keys.
+func applyPatch(net deco.Obj, p deco.WirelessPatch) (map[string]any, error) {
+	out := make(map[string]any, len(net))
+	for k, v := range net {
+		out[k] = v // keep the device's other settings verbatim
+	}
+	has := func(k string) error {
+		if _, ok := net[k]; !ok {
+			return fmt.Errorf("the device does not report %q for the %s network", k, networkName(p.Network))
+		}
+		return nil
+	}
+	if p.Enable != nil {
+		if err := has("enable"); err != nil {
+			return nil, err
+		}
+		out["enable"] = *p.Enable
+	}
+	if p.SSID != nil {
+		out["ssid"] = base64.StdEncoding.EncodeToString([]byte(*p.SSID))
+	}
+	if p.Password != nil {
+		out["password"] = base64.StdEncoding.EncodeToString([]byte(*p.Password))
+	}
+	if p.Encryption != nil {
+		if err := has("encryption_mode"); err != nil {
+			return nil, err
+		}
+		if *p.Encryption != "none" && p.Password == nil && b64Text(net.Str("password")) == "" {
+			return nil, errors.New("a password is required to secure an open network")
+		}
+		out["encryption_mode"] = *p.Encryption
+	}
+	if p.Hidden != nil {
+		if err := has("enable_hide_ssid"); err != nil {
+			return nil, err
+		}
+		out["enable_hide_ssid"] = *p.Hidden
+	}
+	return out, nil
+}
+
+// confirm checks the read-back network against the patch.
+func confirm(n deco.Obj, p deco.WirelessPatch) error {
+	switch {
+	case p.Enable != nil && n.Bool("enable") != *p.Enable:
+		return errors.New("does not show the network turned on or off yet")
+	case p.SSID != nil && b64Text(n.Str("ssid")) != *p.SSID:
+		return errors.New("does not show the new name yet")
+	case p.Password != nil && b64Text(n.Str("password")) != *p.Password:
+		return errors.New("does not show the new password yet")
+	case p.Encryption != nil && n.Str("encryption_mode") != *p.Encryption:
+		return errors.New("does not show the new security yet")
+	case p.Hidden != nil && n.Bool("enable_hide_ssid") != *p.Hidden:
+		return errors.New("does not show the network hidden or shown yet")
+	}
+	return nil
+}
+
+func validatePatch(p deco.WirelessPatch) error {
+	if !slices.Contains(patchNetworks, p.Network) {
+		return deco.Invalid("unknown Wi-Fi network %q", p.Network)
+	}
+	if len(p.Fields()) == 0 {
+		return deco.Invalid("nothing to change")
+	}
+	if p.Network == "host" && p.Enable != nil {
+		return deco.Invalid("the main network cannot be turned off")
+	}
+	for _, b := range p.Bands {
+		if !deco.IsBand(b) {
+			return deco.Invalid("unknown band %q", b)
+		}
+	}
+	if p.SSID != nil {
+		if err := validateSSID(*p.SSID); err != nil {
+			return deco.Invalid("%s", err.Error())
+		}
+	}
+	if p.Password != nil {
+		if err := validatePassphrase(*p.Password); err != nil {
+			return deco.Invalid("%s", err.Error())
+		}
+	}
+	if p.Encryption != nil && !slices.Contains(encryptionModes, *p.Encryption) {
+		return deco.Invalid("unknown security %q", *p.Encryption)
+	}
+	return nil
+}
+
+func networkName(n string) string {
+	switch n {
+	case "host":
+		return "main"
+	case "iot":
+		return "IoT"
+	}
+	return n
+}
+
+// validateSSID: 1-32 bytes of printable text.
+func validateSSID(ssid string) error {
 	if n := len(ssid); n < 1 || n > 32 || !utf8.ValidString(ssid) {
 		return fmt.Errorf("SSID must be 1-32 bytes of text (got %d bytes)", n)
 	}
@@ -80,6 +228,11 @@ func validateHostWiFi(ssid, password string) error {
 			return errors.New("SSID must not contain control characters")
 		}
 	}
+	return nil
+}
+
+// validatePassphrase: WPA2 limits, 8-63 printable ASCII characters.
+func validatePassphrase(password string) error {
 	if n := len(password); n < 8 || n > 63 {
 		return fmt.Errorf("Wi-Fi password must be 8-63 characters (got %d)", n)
 	}

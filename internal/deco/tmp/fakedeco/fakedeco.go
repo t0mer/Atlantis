@@ -205,8 +205,11 @@ func (d *Device) execute(st *stream, op tmp.Opcode, body []byte) ([]byte, byte) 
 	d.seen = append(d.seen, op)
 	d.requests[op] = append(json.RawMessage(nil), body...)
 	if op == tmp.OpWirelessSet {
-		d.applyWirelessSet(body)
-		b, _ := json.Marshal(map[string]any{"error_code": 0, "result": map[string]any{}})
+		code := 0
+		if !d.applyWirelessSet(body) {
+			code = -1
+		}
+		b, _ := json.Marshal(map[string]any{"error_code": code, "result": map[string]any{}})
 		return b, 0
 	}
 	res, ok := d.results[op]
@@ -276,34 +279,38 @@ func (d *Device) Relay(deviceID string, requestData json.RawMessage) (any, error
 }
 
 // applyWirelessSet merges a WIRELESS_SET's params into the WIRELESS_GET
-// result, network by network, as the device does.
-func (d *Device) applyWirelessSet(body []byte) {
+// result. Like a strict device, it rejects the whole change (false) if it
+// names a band, network or field the current settings do not have.
+func (d *Device) applyWirelessSet(body []byte) bool {
 	var req struct {
 		Params map[string]map[string]map[string]any `json:"params"`
 	}
 	if json.Unmarshal(body, &req) != nil {
-		return
+		return false
 	}
 	cur, _ := d.results[tmp.OpWirelessGet].(map[string]any)
-	if cur == nil {
-		cur = map[string]any{}
-	}
 	for band, nets := range req.Params {
 		b, _ := cur[band].(map[string]any)
-		if b == nil {
-			b = map[string]any{}
-		}
 		for name, fields := range nets {
 			n, _ := b[name].(map[string]any)
 			if n == nil {
-				n = map[string]any{}
+				return false
 			}
+			for k := range fields {
+				if _, ok := n[k]; !ok {
+					return false
+				}
+			}
+		}
+	}
+	for band, nets := range req.Params {
+		b := cur[band].(map[string]any)
+		for name, fields := range nets {
+			n := b[name].(map[string]any)
 			for k, v := range fields {
 				n[k] = v
 			}
-			b[name] = n
 		}
-		cur[band] = b
 	}
-	d.results[tmp.OpWirelessGet] = cur
+	return true
 }

@@ -65,8 +65,8 @@ var allowed = map[Opcode]bool{
 	OpBlockedListGet: true, OpFWLatestGet: true, OpWANInfoGet: true,
 	OpDeviceSignalLevelListGet: true, OpDeviceResourceInfoGet: true,
 	OpIPv4Get: true, OpMLONetworkGet: true, OpDeviceResourceListGet: true,
-	// WIRELESS_SET: host-network SSID/password only (tmpclient.SetHostWiFi),
-	// verified on a Deco M5.
+	// WIRELESS_SET: only through tmpclient.SetNetwork, which sends just the
+	// network fields listed in its verifiedWrites (proven on a Deco M5).
 	OpWirelessSet: true,
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -156,5 +157,117 @@ func TestIdleByeIsReported(t *testing.T) {
 	_, err := c.Devices(context.Background())
 	if !errors.Is(err, deco.ErrOtherAdmin) || dials != 1 {
 		t.Fatalf("want ErrOtherAdmin without reconnecting, got %v (dials=%d)", err, dials)
+	}
+}
+
+// m5Wireless loads the recorded (sanitised) M5 WIRELESS_GET result.
+func m5Wireless(t *testing.T) map[string]any {
+	t.Helper()
+	b, err := os.ReadFile("testdata/m5/wireless_get.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := v["result"].(map[string]any); ok {
+		return r
+	}
+	return v
+}
+
+func sentParams(t *testing.T, d *fakedeco.Device) map[string]map[string]map[string]any {
+	t.Helper()
+	var sent struct {
+		Params map[string]map[string]map[string]any `json:"params"`
+	}
+	json.Unmarshal(d.Request(tmp.OpWirelessSet), &sent)
+	return sent.Params
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestSetNetworkRefusesUnverifiedWrites(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
+	c := newClient(t, d)
+	for _, p := range []deco.WirelessPatch{
+		{Network: "guest", Enable: ptr(true)},
+		{Network: "iot", SSID: ptr("x-iot")},
+		{Network: "host", Hidden: ptr(true)},
+		{Network: "host", SSID: ptr("ok"), Encryption: ptr("wpa3")},
+	} {
+		if _, err := c.SetNetwork(context.Background(), p); !errors.Is(err, deco.ErrNotVerified) {
+			t.Errorf("%+v: got %v", p.Fields(), err)
+		}
+	}
+	if d.Request(tmp.OpWirelessSet) != nil {
+		t.Fatal("an unverified write was sent")
+	}
+	if ed := c.Editable(); len(ed) != 1 || len(ed["host"]) != 2 {
+		t.Fatalf("editable %v", ed)
+	}
+}
+
+func TestProbeNetworkSendsOnlyThatNetworkAndBand(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
+	c := newClient(t, d)
+	bands, err := c.ProbeNetwork(context.Background(), deco.WirelessPatch{Network: "guest", Bands: []string{"band5_1"}, Enable: ptr(true)})
+	if err != nil || len(bands) != 1 || bands[0] != "band5_1" {
+		t.Fatalf("%v %v", bands, err)
+	}
+	sent := sentParams(t, d)
+	if len(sent) != 1 || len(sent["band5_1"]) != 1 {
+		t.Fatalf("only band5_1 guest may be sent: %v", sent)
+	}
+	g := sent["band5_1"]["guest"]
+	if g["enable"] != true || g["access_duration"] != "14400" || g["host_isolation"] != true {
+		t.Fatalf("the guest network's other settings must be kept: %v", g)
+	}
+}
+
+func TestProbeNetworkSecuresAnOpenNetwork(t *testing.T) {
+	d := fakedeco.New()
+	w := m5Wireless(t)
+	for _, b := range []string{"band2_4", "band5_1"} {
+		w[b].(map[string]any)["guest"].(map[string]any)["password"] = ""
+	}
+	d.SetResult(tmp.OpWirelessGet, w)
+	c := newClient(t, d)
+	ctx := context.Background()
+	if _, err := c.ProbeNetwork(ctx, deco.WirelessPatch{Network: "guest", Encryption: ptr("wpa2")}); !errors.Is(err, deco.ErrInvalid) {
+		t.Fatalf("securing without a password: %v", err)
+	}
+	if _, err := c.ProbeNetwork(ctx, deco.WirelessPatch{Network: "guest", Encryption: ptr("wpa2"), Password: ptr("guest-pass-1")}); err != nil {
+		t.Fatal(err)
+	}
+	g := sentParams(t, d)["band2_4"]["guest"]
+	if g["encryption_mode"] != "wpa2" || g["password"] != b64("guest-pass-1") {
+		t.Fatalf("%v", g)
+	}
+}
+
+func TestPatchValidation(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
+	c := newClient(t, d)
+	for _, p := range []deco.WirelessPatch{
+		{Network: "host", Enable: ptr(false)}, // the main network stays on
+		{Network: "guest"},                    // nothing to change
+		{Network: "mlo", Enable: ptr(true)},   // read-only
+		{Network: "guest", Bands: []string{"band9"}, Enable: ptr(true)},
+		{Network: "guest", Hidden: ptr(true)}, // the M5 reports no enable_hide_ssid for guest
+		{Network: "guest", Encryption: ptr("rot13")},
+		{Network: "guest", SSID: ptr(strings.Repeat("x", 33))},
+		{Network: "guest", Password: ptr("short")},
+	} {
+		if _, err := c.ProbeNetwork(context.Background(), p); !errors.Is(err, deco.ErrInvalid) {
+			t.Errorf("%+v: got %v", p, err)
+		}
+	}
+	if d.Request(tmp.OpWirelessSet) != nil {
+		t.Fatal("an invalid write was sent")
 	}
 }
