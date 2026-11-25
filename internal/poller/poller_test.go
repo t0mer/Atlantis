@@ -203,3 +203,31 @@ func TestAbsentClientRecordedOffline(t *testing.T) {
 		t.Fatalf("want a trailing offline sample: %+v", hist)
 	}
 }
+
+func TestSetIntervalsRestartsTimers(t *testing.T) {
+	f := &fakeDeco{nodes: []deco.Device{{ID: "m", Master: true, Online: true}}}
+	p, _, _, _, _ := setup(t, f)
+	p.opts.Fast, p.opts.Slow = time.Hour, time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { p.Run(ctx); close(done) }()
+	waitFast := func(after time.Time) time.Time {
+		for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			if at := p.Snapshot().FastAt; at.After(after) {
+				return at
+			}
+		}
+		t.Fatal("no fast poll")
+		return time.Time{}
+	}
+	first := waitFast(time.Time{})
+	p.SetIntervals(Intervals{Fast: 20 * time.Millisecond, Slow: time.Hour, OfflineAfter: 3})
+	second := waitFast(first) // with the hour-long timer this would never come
+	waitFast(second)
+	cancel()
+	<-done
+	if p.opts.Fast != 20*time.Millisecond || p.engine.OfflineAfter() != 3 {
+		t.Fatalf("not applied: %v", p.opts)
+	}
+}

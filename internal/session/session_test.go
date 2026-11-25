@@ -216,3 +216,21 @@ func TestCallsAreSerialised(t *testing.T) {
 		t.Fatalf("%d calls ran at once", peak)
 	}
 }
+
+// A call that was waiting when the connection was closed must not sign in
+// again: nobody would ever log that session out.
+func TestNoCallsAfterClose(t *testing.T) {
+	f := &fakeClient{}
+	m := New(f, nil)
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ran := false
+	err := m.Do(context.Background(), func(context.Context, deco.Client) error { ran = true; return nil })
+	if !errors.Is(err, ErrClosed) || ran {
+		t.Fatalf("Do after Close: %v ran=%v", err, ran)
+	}
+	if err := m.Pause(context.Background()); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Pause after Close: %v", err)
+	}
+}

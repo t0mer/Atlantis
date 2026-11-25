@@ -1,0 +1,18 @@
+{
+ "mac": "00-00-5E-00-53-01",
+ "tmp_port": [20001],
+ "hardware_version": "3.2",
+ "group_name": "ZXhhbXBsZQ==",
+ "need_account_digest": true,
+ "owner": "00000000000000000000000000000000",
+ "master_device_id": "00000000000000000000000000000001",
+ "ip": "192.0.2.1",
+ "device_type": "HOMEWIFISYSTEM",
+ "role": "master",
+ "channel_2g": "1",
+ "device_model": "M5",
+ "device_id": "00000000000000000000000000000001",
+ "group_id": "00000000000000000000000000000002",
+ "channel_5g": "36",
+ "factory_default": false
+}

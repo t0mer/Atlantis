@@ -43,6 +43,10 @@ export function applyMessage(qc: QueryClient, kind: string, data: unknown) {
       (e.type.startsWith("node.") ? ["nodes", "node"] : ["clients", "client"]).forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
       break;
     }
+    case "deco":
+      // The Deco was added, changed or removed: everything is different.
+      qc.invalidateQueries();
+      break;
     case "session":
       qc.setQueryData<SessionStatus>(["session"], data as SessionStatus);
       qc.invalidateQueries({ queryKey: ["network"] });
@@ -56,7 +60,7 @@ export function useLiveStream(enabled: boolean) {
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") return;
     const es = new EventSource("/api/v1/stream");
-    const kinds = ["snapshot", "clients", "event", "session"];
+    const kinds = ["snapshot", "clients", "event", "session", "deco"];
     const handlers = kinds.map((k) => {
       const h = (m: MessageEvent<string>) => {
         try {

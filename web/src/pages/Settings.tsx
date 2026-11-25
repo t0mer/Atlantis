@@ -1,8 +1,34 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { useChannelMutations, useChannels, useSession, useSessionActions, useSettings, type ChannelInput } from "../api/hooks";
-import type { Channel, EventType } from "../api/types";
-import { Button, Confirm, Dialog, Empty, ErrorNote, Field, Input, PageTitle, Panel, Switch, inputClass, sessionDot, useToast } from "../components/ui";
+import {
+  useChannelMutations,
+  useChannels,
+  useDeco,
+  useDecoMutations,
+  useSession,
+  useSessionActions,
+  useSetPoll,
+  useSettings,
+  type ChannelInput,
+} from "../api/hooks";
+import type { Channel, EventType, Settings as SettingsData } from "../api/types";
+import { DecoForm } from "../components/DecoForm";
+import {
+  Button,
+  Confirm,
+  Dialog,
+  Empty,
+  ErrorNote,
+  Field,
+  Input,
+  PageTitle,
+  Panel,
+  Switch,
+  inputClass,
+  selectClass,
+  sessionDot,
+  useToast,
+} from "../components/ui";
 import { ago, goDuration, sessionSentence } from "../lib/format";
 
 const eventNames: Record<EventType, string> = {
@@ -240,16 +266,140 @@ function ChannelsPanel({ allEvents }: { allEvents: EventType[] }) {
   );
 }
 
+function DecoPanel() {
+  const { data: d } = useDeco();
+  const m = useDecoMutations();
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  if (!d?.configured) return null;
+  const rows: [string, string][] = [
+    ["Address", `${d.host}${d.port ? `:${d.port}` : ""}`],
+    ["Model", d.discovery?.model ? `Deco ${d.discovery.model}` : "—"],
+    ["Connection", d.transport === "luci" ? "Local web page" : "Deco app protocol (SSH)"],
+    ["TP-Link account", d.email || "—"],
+    ["Security key", d.host_key || "—"],
+  ];
+  return (
+    <Panel
+      title="Deco"
+      action={
+        <div className="flex gap-2">
+          <Button onClick={() => (m.change.reset(), setEditing(true))}>Change connection</Button>
+          <Button tone="danger" onClick={() => setRemoving(true)}>
+            Remove
+          </Button>
+        </div>
+      }
+    >
+      <dl className="text-sm">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex justify-between gap-4 border-t border-line py-2 first:border-t-0">
+            <dt className="text-drift">{k}</dt>
+            <dd className="tnum text-right break-all">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      <Dialog open={editing} onOpenChange={setEditing} title="Change the Deco connection">
+        <DecoForm
+          current={d}
+          busy={m.change.isPending}
+          error={m.change.error}
+          submitLabel="Save and reconnect"
+          onCancel={() => setEditing(false)}
+          onSubmit={(c) => m.change.mutate(c, { onSuccess: () => (setEditing(false), toast("Reconnected to the Deco")) })}
+        />
+      </Dialog>
+      <Confirm
+        open={removing}
+        onOpenChange={setRemoving}
+        title="Remove the Deco?"
+        body={
+          <p>
+            Atlantis signs out, forgets this Deco and deletes its devices, history and events. Notification channels and your account stay. You can
+            connect a Deco again afterwards.
+          </p>
+        }
+        action="Remove"
+        typed="REMOVE"
+        busy={m.remove.isPending}
+        onConfirm={() =>
+          m.remove.mutate(undefined, {
+            onSuccess: () => (setRemoving(false), toast("Deco removed")),
+            onError: (e) => toast((e as Error).message, "bad"),
+          })
+        }
+      />
+    </Panel>
+  );
+}
+
+const fastChoices = ["10s", "15s", "30s", "1m", "2m", "5m"];
+const slowChoices = ["1m", "2m", "5m", "10m", "15m", "30m", "1h"];
+// Go prints durations as "1m0s"; the choices are written short.
+const short = (d: string) => d.replace(/(\d)m0s$/, "$1m").replace(/(\d)h0m$/, "$1h").replace(/^1h0m0s$/, "1h");
+const withCurrent = (choices: string[], cur: string) => (choices.includes(cur) ? choices : [cur, ...choices]);
+
+function RefreshPanel({ s }: { s: SettingsData }) {
+  const set = useSetPoll();
+  const toast = useToast();
+  const [fast, setFast] = useState(short(s.poll.fast));
+  const [slow, setSlow] = useState(short(s.poll.slow));
+  const [misses, setMisses] = useState(s.poll.offline_after_misses);
+  const changed = fast !== short(s.poll.fast) || slow !== short(s.poll.slow) || misses !== s.poll.offline_after_misses;
+  return (
+    <Panel title="Refresh">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Field label="Check devices every" hint="Who is online, speeds and load.">
+          <select className={`${selectClass} w-full`} value={fast} onChange={(e) => setFast(e.target.value)}>
+            {withCurrent(fastChoices, fast).map((v) => (
+              <option key={v} value={v}>
+                {goDuration(v)}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Check the mesh every" hint="Decos, internet, Wi-Fi and firmware.">
+          <select className={`${selectClass} w-full`} value={slow} onChange={(e) => setSlow(e.target.value)}>
+            {withCurrent(slowChoices, slow).map((v) => (
+              <option key={v} value={v}>
+                {goDuration(v)}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Mark a device offline after" hint="Missed device checks in a row.">
+          <select className={`${selectClass} w-full`} value={misses} onChange={(e) => setMisses(Number(e.target.value))}>
+            {[...new Set([1, 2, 3, 4, 5, misses])].sort((a, b) => a - b).map((n) => (
+              <option key={n} value={n}>
+                {n} missed {n === 1 ? "check" : "checks"}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <ErrorNote error={set.error} />
+      <div className="mt-4 flex items-center justify-between gap-4">
+        <p className="text-xs text-drift">
+          {s.poll.source === "ui" ? "Set here; overrides the configuration file." : "From the configuration file until you save here."} Faster checks mean
+          more sign-in traffic to the Deco.
+        </p>
+        <Button
+          tone="primary"
+          disabled={!changed || set.isPending}
+          onClick={() => set.mutate({ fast, slow, offline_after_misses: misses }, { onSuccess: () => toast("Refresh times saved") })}
+        >
+          Save
+        </Button>
+      </div>
+    </Panel>
+  );
+}
+
 export function Settings() {
   const { data: s, error } = useSettings();
   const rows: [string, string][] = s
     ? [
-        ["Deco address", `${s.deco.host}${s.deco.port ? `:${s.deco.port}` : ""}`],
-        ["Connection", s.deco.transport],
-        ["TP-Link account", s.deco.email || "—"],
-        ["Device check", `every ${goDuration(s.poll.fast)}`],
-        ["Mesh check", `every ${goDuration(s.poll.slow)}`],
-        ["Offline after", `${s.poll.offline_after_misses} missed checks`],
         ["Keep raw samples", goDuration(s.store.raw_retention)],
         ["Keep hourly history", goDuration(s.store.rollup_retention)],
         ["Prometheus metrics", s.metrics.enabled ? `${s.metrics.path} (per-device: ${s.metrics.per_client})` : "off"],
@@ -261,7 +411,9 @@ export function Settings() {
     <>
       <PageTitle>Settings</PageTitle>
       <div className="space-y-6">
+        <DecoPanel />
         <SessionPanel />
+        {s && <RefreshPanel key={`${s.poll.fast}-${s.poll.slow}-${s.poll.offline_after_misses}`} s={s} />}
         <ChannelsPanel allEvents={s?.notify.events ?? []} />
         <Panel title="Configuration">
           <ErrorNote error={error} />

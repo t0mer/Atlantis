@@ -112,6 +112,7 @@ type Network struct {
 	ID          int64
 	Name        string
 	Host        string
+	Port        int // SSH port; 0 = discover with TDP
 	Transport   string
 	Email       string
 	PasswordEnc string // sealed with internal/secret; never returned by the API
@@ -120,29 +121,86 @@ type Network struct {
 	CreatedAt   time.Time
 }
 
-// EnsureNetwork returns the site, creating it from n on first start. On
-// later starts host, transport and email follow the configuration, and a
-// non-empty sealed password replaces the stored one.
-func (s *Store) EnsureNetwork(ctx context.Context, n Network) (Network, error) {
-	var cur Network
+const networkCols = `id, name, host, port, transport, email, password_enc, host_key, tls_pin, created_at`
+
+func (s *Store) firstNetwork(ctx context.Context) (Network, error) {
+	var n Network
 	var created int64
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, host, transport, email, password_enc, host_key, tls_pin, created_at FROM networks ORDER BY id LIMIT 1`).
-		Scan(&cur.ID, &cur.Name, &cur.Host, &cur.Transport, &cur.Email, &cur.PasswordEnc, &cur.HostKey, &cur.TLSPin, &created)
-	switch {
-	case err == sql.ErrNoRows:
-		res, err := s.db.ExecContext(ctx, `INSERT INTO networks (name, host, transport, email, password_enc, host_key, tls_pin, created_at) VALUES (?,?,?,?,?,?,?,?)`,
-			n.Name, n.Host, n.Transport, n.Email, n.PasswordEnc, n.HostKey, n.TLSPin, s.now().Unix())
+	err := s.db.QueryRowContext(ctx, `SELECT `+networkCols+` FROM networks ORDER BY id LIMIT 1`).
+		Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Transport, &n.Email, &n.PasswordEnc, &n.HostKey, &n.TLSPin, &created)
+	n.CreatedAt = time.Unix(created, 0)
+	return n, err
+}
+
+// GetNetwork returns the site, or ok=false when no Deco has been added.
+func (s *Store) GetNetwork(ctx context.Context) (Network, bool, error) {
+	n, err := s.firstNetwork(ctx)
+	if err == sql.ErrNoRows {
+		return Network{}, false, nil
+	}
+	return n, err == nil, err
+}
+
+// SaveNetwork stores n as the site: it inserts it when n.ID is 0 and
+// otherwise replaces every field of that row. Name and CreatedAt are kept.
+func (s *Store) SaveNetwork(ctx context.Context, n Network) (Network, error) {
+	if n.ID == 0 {
+		res, err := s.db.ExecContext(ctx, `INSERT INTO networks (name, host, port, transport, email, password_enc, host_key, tls_pin, created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+			n.Name, n.Host, n.Port, n.Transport, n.Email, n.PasswordEnc, n.HostKey, n.TLSPin, s.now().Unix())
 		if err != nil {
 			return Network{}, err
 		}
 		n.ID, _ = res.LastInsertId()
 		n.CreatedAt = s.now()
 		return n, nil
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE networks SET host=?, port=?, transport=?, email=?, password_enc=?, host_key=?, tls_pin=? WHERE id=?`,
+		n.Host, n.Port, n.Transport, n.Email, n.PasswordEnc, n.HostKey, n.TLSPin, n.ID)
+	if err != nil {
+		return Network{}, err
+	}
+	if k, _ := res.RowsAffected(); k == 0 {
+		return Network{}, fmt.Errorf("store: network %d not found", n.ID)
+	}
+	return s.firstNetwork(ctx)
+}
+
+// networkTables are the tables scoped to one site, children first.
+var networkTables = []string{"client_rollups", "node_rollups", "client_samples", "node_samples", "events", "clients", "nodes"}
+
+// DeleteNetwork removes the site and everything recorded for it: nodes,
+// clients, their history and events. Channels, users, settings and the
+// audit log are not per site and stay.
+func (s *Store) DeleteNetwork(ctx context.Context, networkID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, t := range networkTables {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+t+` WHERE network_id=?`, networkID); err != nil {
+			return fmt.Errorf("store: clearing %s: %w", t, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM networks WHERE id=?`, networkID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// EnsureNetwork returns the site, creating it from n on first start. On
+// later starts host, port, transport and email follow the configuration,
+// and a non-empty sealed password replaces the stored one.
+func (s *Store) EnsureNetwork(ctx context.Context, n Network) (Network, error) {
+	cur, err := s.firstNetwork(ctx)
+	switch {
+	case err == sql.ErrNoRows:
+		n.ID = 0
+		return s.SaveNetwork(ctx, n)
 	case err != nil:
 		return Network{}, err
 	}
-	cur.CreatedAt = time.Unix(created, 0)
-	cur.Host, cur.Transport, cur.Email = n.Host, n.Transport, n.Email
+	cur.Host, cur.Port, cur.Transport, cur.Email = n.Host, n.Port, n.Transport, n.Email
 	if n.PasswordEnc != "" {
 		cur.PasswordEnc = n.PasswordEnc
 	}
@@ -152,9 +210,7 @@ func (s *Store) EnsureNetwork(ctx context.Context, n Network) (Network, error) {
 	if n.TLSPin != "" {
 		cur.TLSPin = n.TLSPin
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE networks SET host=?, transport=?, email=?, password_enc=?, host_key=?, tls_pin=? WHERE id=?`,
-		cur.Host, cur.Transport, cur.Email, cur.PasswordEnc, cur.HostKey, cur.TLSPin, cur.ID)
-	return cur, err
+	return s.SaveNetwork(ctx, cur)
 }
 
 // SetHostKey stores the SSH host key fingerprint to pin ("" clears it,

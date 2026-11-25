@@ -1,0 +1,71 @@
+{
+  "network": "iot",
+  "field": "ssid",
+  "before": {
+    "band2_4": {
+      "enable": false,
+      "enable_wpa3": false,
+      "encryption_mode": "wpa2+wpa",
+      "password": "[redacted]",
+      "ssid": "[redacted]"
+    },
+    "band5_1": {
+      "enable": false,
+      "enable_wpa3": false,
+      "encryption_mode": "wpa2+wpa",
+      "password": "[redacted]",
+      "ssid": "[redacted]"
+    }
+  },
+  "change": {
+    "patch": [
+      "ssid"
+    ],
+    "bands": [
+      "band2_4",
+      "band5_1"
+    ],
+    "after": {
+      "band2_4": {
+        "enable": false,
+        "enable_wpa3": false,
+        "encryption_mode": "wpa2+wpa",
+        "password": "[redacted]",
+        "ssid": "[redacted]"
+      },
+      "band5_1": {
+        "enable": false,
+        "enable_wpa3": false,
+        "encryption_mode": "wpa2+wpa",
+        "password": "[redacted]",
+        "ssid": "[redacted]"
+      }
+    }
+  },
+  "restore": {
+    "patch": [
+      "ssid"
+    ],
+    "bands": [
+      "band2_4",
+      "band5_1"
+    ],
+    "after": {
+      "band2_4": {
+        "enable": false,
+        "enable_wpa3": false,
+        "encryption_mode": "wpa2+wpa",
+        "password": "[redacted]",
+        "ssid": "[redacted]"
+      },
+      "band5_1": {
+        "enable": false,
+        "enable_wpa3": false,
+        "encryption_mode": "wpa2+wpa",
+        "password": "[redacted]",
+        "ssid": "[redacted]"
+      }
+    }
+  },
+  "result": "pass"
+}

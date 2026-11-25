@@ -112,6 +112,18 @@ export interface Band {
 
 export interface Wireless {
   bands: Record<string, Band>;
+  /** Network key → fields Atlantis may change (verified on a real Deco). */
+  editable: Record<string, string[]>;
+}
+
+export interface WirelessPatch {
+  network: string;
+  bands?: string[];
+  enable?: boolean;
+  ssid?: string;
+  password?: string;
+  encryption?: string;
+  hidden?: boolean;
 }
 
 export interface Firmware {
@@ -143,7 +155,7 @@ export interface NetworkSummary {
   performance: { cpu_usage: number; mem_usage: number } | null;
   performance_supported: boolean;
   nodes: { online: number; total: number };
-  clients: Record<"total" | "wired" | "guest" | "band2_4" | "band5" | "band6", number>;
+  clients: Record<"total" | "wired" | "guest" | "band2_4" | "band5" | "band6" | "band60", number>;
   updated: { fast?: string; slow?: string };
 }
 
@@ -197,7 +209,7 @@ export interface Snapshot {
 
 export interface Settings {
   deco: { transport: string; host: string; port: number; email: string };
-  poll: { fast: string; slow: string; offline_after_misses: number };
+  poll: { fast: string; slow: string; offline_after_misses: number; source: "ui" | "config" };
   store: { raw_retention: string; rollup_retention: string };
   metrics: { enabled: boolean; path: string; per_client: string };
   notify: { quiet_hours: string; timezone: string; events: EventType[] };
@@ -208,4 +220,25 @@ export interface AuthStatus {
   setup_required: boolean;
   user?: string;
   csrf_token?: string;
+}
+
+export interface DecoStatus {
+  configured: boolean;
+  running: boolean;
+  changing: boolean;
+  needs_password: boolean;
+  host?: string;
+  port?: number;
+  transport?: "ssh" | "luci";
+  email?: string;
+  host_key?: string;
+  discovery?: { model: string; role: string; port: number };
+}
+
+export interface DecoConnect {
+  host: string;
+  port?: number;
+  transport?: "ssh" | "luci";
+  email?: string;
+  password?: string;
 }

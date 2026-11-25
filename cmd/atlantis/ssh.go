@@ -34,6 +34,7 @@ func newSSHCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "ssh", Short: "Reach a Deco on the LAN over SSH with the TP-Link ID, like the Deco app"}
 	cmd.AddCommand(newSSHProbeCmd())
 	cmd.AddCommand(newSSHSetWiFiCmd())
+	cmd.AddCommand(newSSHWiFiProbeCmd())
 	return cmd
 }
 

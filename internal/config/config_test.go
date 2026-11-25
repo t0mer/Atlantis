@@ -67,7 +67,7 @@ log: {level: loud}
 	if err == nil {
 		t.Fatal("expected errors")
 	}
-	for _, want := range []string{"transport", "deco.host", "poll intervals", "per_client", "timezone", "quiet_hours", "log.level", "ATLANTIS_SECRET_KEY"} {
+	for _, want := range []string{"transport", "poll intervals", "per_client", "timezone", "quiet_hours", "log.level", "ATLANTIS_SECRET_KEY"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in:\n%v", want, err)
 		}
@@ -81,5 +81,16 @@ func TestQuietHours(t *testing.T) {
 	}
 	if _, _, err := ParseQuietHours("23:00"); err == nil {
 		t.Fatal("missing range accepted")
+	}
+}
+
+func TestDecoIsOptional(t *testing.T) {
+	t.Setenv("ATLANTIS_SECRET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if _, err := Load(writeYAML(t, "server: {listen: ':8080'}\n"), nil); err != nil {
+		t.Fatalf("no Deco must be fine, it is added from the UI: %v", err)
+	}
+	_, err := Load(writeYAML(t, "deco: {host: 192.0.2.1}\n"), nil)
+	if err == nil || !strings.Contains(err.Error(), "deco.email") {
+		t.Fatalf("a host without the TP-Link ID must fail: %v", err)
 	}
 }

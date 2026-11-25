@@ -63,6 +63,7 @@ type Poller struct {
 
 	engine  *events.Engine
 	refresh chan struct{}
+	retime  chan Intervals
 
 	mu   sync.RWMutex
 	snap Snapshot
@@ -76,7 +77,7 @@ func New(ctx context.Context, opts Options, sess *session.Manager, st *store.Sto
 	}
 	return &Poller{
 		opts: opts, sess: sess, store: st, notify: notify, metrics: m, hub: hub, log: log, now: time.Now,
-		engine: events.New(known, opts.OfflineAfter), refresh: make(chan struct{}, 1),
+		engine: events.New(known, opts.OfflineAfter), refresh: make(chan struct{}, 1), retime: make(chan Intervals, 1),
 	}, nil
 }
 
@@ -93,6 +94,38 @@ func (p *Poller) Refresh() {
 	case p.refresh <- struct{}{}:
 	default:
 	}
+}
+
+// Intervals are the poll timings that can change while running.
+type Intervals struct {
+	Fast, Slow   time.Duration
+	OfflineAfter int
+}
+
+// SetIntervals changes the poll timings; Run applies them at once and
+// restarts both timers. The latest call wins.
+func (p *Poller) SetIntervals(iv Intervals) {
+	for {
+		select {
+		case p.retime <- iv:
+			return
+		default:
+		}
+		select { // replace a value Run has not picked up yet
+		case <-p.retime:
+		default:
+		}
+	}
+}
+
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
 }
 
 func jitter(d time.Duration) time.Duration {
@@ -123,6 +156,13 @@ func (p *Poller) Run(ctx context.Context) {
 		case <-p.refresh:
 			p.Slow(ctx)
 			p.Fast(ctx)
+		case iv := <-p.retime:
+			// opts and the engine are only touched on this goroutine.
+			p.opts.Fast, p.opts.Slow, p.opts.OfflineAfter = iv.Fast, iv.Slow, iv.OfflineAfter
+			p.engine.SetOfflineAfter(iv.OfflineAfter)
+			resetTimer(fast, jitter(iv.Fast))
+			resetTimer(slow, jitter(iv.Slow))
+			p.log.Info("refresh intervals changed", "fast", iv.Fast, "slow", iv.Slow, "offline_after", iv.OfflineAfter)
 		case <-compact.C:
 			if err := p.store.Compact(ctx, p.opts.RawRetention, p.opts.RollupRetention); err != nil {
 				p.log.Error("compacting history", "err", err)

@@ -49,6 +49,7 @@ var (
 	ErrPaused  = errors.New("session: paused")
 	ErrBlocked = errors.New("session: waiting for another admin to release the Deco")
 	ErrStopped = errors.New("session: stopped until credentials or the host key are fixed")
+	ErrClosed  = errors.New("session: this Deco connection was closed")
 )
 
 const (
@@ -73,6 +74,9 @@ type Manager struct {
 	// only by ClearCert after the user accepts the new key.
 	stop  State
 	stopE string
+	// closed is set by Close: the manager's connection was retired, so no
+	// call may sign in to the Deco again.
+	closed bool
 }
 
 // New returns a manager. onChange, if non-nil, is called (without locks
@@ -85,6 +89,10 @@ func New(c deco.Client, onChange func(Status)) *Manager {
 
 // SetClock replaces the time source (tests).
 func (m *Manager) SetClock(now func() time.Time) { m.now = now }
+
+// Client is the device client the manager guards. Use Do for device
+// calls; this is for static capabilities (such as deco.WiFiWriter.Editable).
+func (m *Manager) Client() deco.Client { return m.client }
 
 // Status returns the current status.
 func (m *Manager) Status() Status {
@@ -119,6 +127,9 @@ func (m *Manager) gate() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
+	if m.closed {
+		return ErrClosed
+	}
 	if m.stop != "" {
 		return ErrStopped
 	}
@@ -223,6 +234,10 @@ func (m *Manager) Pause(ctx context.Context) error {
 	m.call.Lock()
 	defer m.call.Unlock()
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return ErrClosed
+	}
 	m.resumeAt = time.Time{}
 	m.mu.Unlock()
 	err := m.client.Logout(ctx)
@@ -281,5 +296,8 @@ func (m *Manager) Stopped() State {
 func (m *Manager) Close(ctx context.Context) error {
 	m.call.Lock()
 	defer m.call.Unlock()
+	m.mu.Lock()
+	m.closed = true
+	m.mu.Unlock()
 	return m.client.Logout(ctx)
 }

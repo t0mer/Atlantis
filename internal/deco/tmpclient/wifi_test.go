@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -156,5 +158,186 @@ func TestIdleByeIsReported(t *testing.T) {
 	_, err := c.Devices(context.Background())
 	if !errors.Is(err, deco.ErrOtherAdmin) || dials != 1 {
 		t.Fatalf("want ErrOtherAdmin without reconnecting, got %v (dials=%d)", err, dials)
+	}
+}
+
+// m5Wireless loads the recorded (sanitised) M5 WIRELESS_GET result.
+func m5Wireless(t *testing.T) map[string]any {
+	t.Helper()
+	b, err := os.ReadFile("testdata/m5/wireless_get.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(b, &v); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := v["result"].(map[string]any); ok {
+		return r
+	}
+	return v
+}
+
+func sentParams(t *testing.T, d *fakedeco.Device) map[string]map[string]map[string]any {
+	t.Helper()
+	var sent struct {
+		Params map[string]map[string]map[string]any `json:"params"`
+	}
+	json.Unmarshal(d.Request(tmp.OpWirelessSet), &sent)
+	return sent.Params
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestSetNetworkRefusesUnverifiedWrites(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
+	c := newClient(t, d)
+	for _, p := range []deco.WirelessPatch{
+		{Network: "iot", Encryption: ptr("wpa2")},
+		{Network: "iot", Hidden: ptr(true)},
+		{Network: "host", Hidden: ptr(true)},
+		{Network: "host", SSID: ptr("ok"), Encryption: ptr("wpa3")},
+		{Network: "guest", Encryption: ptr("wpa2+wpa"), Password: ptr("guest-pass-1")}, // value not proven
+		{Network: "guest", Bands: []string{"band2_4"}, Enable: ptr(true)},              // single band not proven
+	} {
+		if _, err := c.SetNetwork(context.Background(), p); !errors.Is(err, deco.ErrNotVerified) {
+			t.Errorf("%+v: got %v", p.Fields(), err)
+		}
+	}
+	if d.Request(tmp.OpWirelessSet) != nil {
+		t.Fatal("an unverified write was sent")
+	}
+	if ed := c.Editable(); len(ed["host"]) != 2 || len(ed["iot"]) != 3 {
+		t.Fatalf("editable %v", ed)
+	}
+}
+
+func TestProbeNetworkSendsOnlyThatNetworkAndBand(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
+	c := newClient(t, d)
+	bands, err := c.ProbeNetwork(context.Background(), deco.WirelessPatch{Network: "guest", Bands: []string{"band5_1"}, Enable: ptr(true)})
+	if err != nil || len(bands) != 1 || bands[0] != "band5_1" {
+		t.Fatalf("%v %v", bands, err)
+	}
+	sent := sentParams(t, d)
+	if len(sent) != 1 || len(sent["band5_1"]) != 1 {
+		t.Fatalf("only band5_1 guest may be sent: %v", sent)
+	}
+	g := sent["band5_1"]["guest"]
+	if g["enable"] != true || g["access_duration"] != "14400" || g["host_isolation"] != true {
+		t.Fatalf("the guest network's other settings must be kept: %v", g)
+	}
+}
+
+func TestProbeNetworkSecuresAnOpenNetwork(t *testing.T) {
+	d := fakedeco.New()
+	w := m5Wireless(t)
+	for _, b := range []string{"band2_4", "band5_1"} {
+		w[b].(map[string]any)["guest"].(map[string]any)["password"] = ""
+	}
+	d.SetResult(tmp.OpWirelessGet, w)
+	c := newClient(t, d)
+	ctx := context.Background()
+	if _, err := c.ProbeNetwork(ctx, deco.WirelessPatch{Network: "guest", Encryption: ptr("wpa2")}); !errors.Is(err, deco.ErrInvalid) {
+		t.Fatalf("securing without a password: %v", err)
+	}
+	if _, err := c.ProbeNetwork(ctx, deco.WirelessPatch{Network: "guest", Encryption: ptr("wpa2"), Password: ptr("guest-pass-1")}); err != nil {
+		t.Fatal(err)
+	}
+	g := sentParams(t, d)["band2_4"]["guest"]
+	if g["encryption_mode"] != "wpa2" || g["password"] != b64("guest-pass-1") {
+		t.Fatalf("%v", g)
+	}
+}
+
+func TestPatchValidation(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
+	c := newClient(t, d)
+	for _, p := range []deco.WirelessPatch{
+		{Network: "host", Enable: ptr(false)}, // the main network stays on
+		{Network: "guest"},                    // nothing to change
+		{Network: "mlo", Enable: ptr(true)},   // read-only
+		{Network: "guest", Bands: []string{"band9"}, Enable: ptr(true)},
+		{Network: "guest", Hidden: ptr(true)}, // the M5 reports no enable_hide_ssid for guest
+		{Network: "guest", Encryption: ptr("rot13")},
+		{Network: "guest", SSID: ptr(strings.Repeat("x", 33))},
+		{Network: "guest", Password: ptr("short")},
+	} {
+		if _, err := c.ProbeNetwork(context.Background(), p); !errors.Is(err, deco.ErrInvalid) {
+			t.Errorf("%+v: got %v", p, err)
+		}
+	}
+	if d.Request(tmp.OpWirelessSet) != nil {
+		t.Fatal("an invalid write was sent")
+	}
+}
+
+// Every verified write must be backed by a passing hardware probe record.
+func TestVerifiedWritesHaveEvidence(t *testing.T) {
+	files, _ := filepath.Glob("testdata/m5/wifi_probe_*.json")
+	proven := map[string]bool{"host/" + deco.FieldSSID: true, "host/" + deco.FieldPassword: true} // via ssh set-wifi
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		var rec struct {
+			Network string `json:"network"`
+			Result  string `json:"result"`
+			Change  struct {
+				Patch []string `json:"patch"`
+			} `json:"change"`
+			Restore struct {
+				Patch []string `json:"patch"`
+			} `json:"restore"`
+		}
+		if err := json.Unmarshal(b, &rec); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		if rec.Result != "pass" {
+			continue
+		}
+		for _, fl := range append(rec.Change.Patch, rec.Restore.Patch...) {
+			proven[rec.Network+"/"+fl] = true
+		}
+	}
+	c := newClient(t, fakedeco.New())
+	for net, fields := range c.Editable() {
+		for _, f := range fields {
+			if !proven[net+"/"+f] {
+				t.Errorf("%s %s is marked verified but no passing probe record shows it", net, f)
+			}
+		}
+	}
+}
+
+// A change the device does not show afterwards is undone.
+func TestSetNetworkRestoresWhenNotConfirmed(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
+	d.IgnoreWirelessSets(1) // accepts the first write without applying it
+	c := newClient(t, d)
+	_, err := c.SetNetwork(context.Background(), deco.WirelessPatch{Network: "guest", Enable: ptr(true)})
+	if err == nil || !strings.Contains(err.Error(), "previous settings were restored") {
+		t.Fatalf("got %v", err)
+	}
+	g := sentParams(t, d)["band2_4"]["guest"]
+	if g["enable"] != false {
+		t.Fatalf("the last write must restore the original: %v", g)
+	}
+}
+
+// If the read-back fails, the change is undone rather than left half-known.
+func TestSetNetworkRestoresWhenReadBackFails(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
+	d.FailWirelessGetAfterSet()
+	c := newClient(t, d)
+	_, err := c.SetNetwork(context.Background(), deco.WirelessPatch{Network: "guest", Enable: ptr(true)})
+	if err == nil || !strings.Contains(err.Error(), "previous settings were restored") {
+		t.Fatalf("got %v", err)
+	}
+	if g := sentParams(t, d)["band2_4"]["guest"]; g["enable"] != false {
+		t.Fatalf("the last write must restore the original: %v", g)
 	}
 }

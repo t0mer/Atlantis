@@ -123,13 +123,21 @@ func main() {
 	}
 	d := srv.Device
 	d.SetResult(tmp.OpDeviceListGet, map[string]any{"device_list": nodes})
-	host := func(on bool, ssid string) map[string]any {
-		return map[string]any{"enable": on, "ssid": b64(ssid), "password": b64("not-shown"), "encryption_mode": "wpa2"}
+	// The field sets an M5 reports for each network (testdata/m5/wireless_get.json).
+	host := func() map[string]any {
+		return map[string]any{"enable": true, "ssid": b64("Atlantis"), "password": b64("not-shown"), "encryption_mode": "wpa2", "enable_hide_ssid": false}
+	}
+	guest := func(on bool) map[string]any {
+		return map[string]any{"enable": on, "ssid": b64("Atlantis Guest"), "password": b64("guest-pass"), "encryption_mode": "wpa2", "access_duration": "14400",
+			"host_isolation": true, "bandwidth_limit": map[string]any{"enable": false, "downstream_bandwidth": 102400, "upstream_bandwidth": 102400}}
+	}
+	iot := func(on bool) map[string]any {
+		return map[string]any{"enable": on, "ssid": b64("Atlantis IoT"), "password": b64("iot-pass-1"), "encryption_mode": "wpa2+wpa", "enable_wpa3": false}
 	}
 	d.SetResult(tmp.OpWirelessGet, map[string]any{
-		"band2_4": map[string]any{"host": host(true, "Atlantis"), "guest": host(true, "Atlantis Guest"), "iot": host(true, "Atlantis IoT"), "radio": map[string]any{"enable": true, "channel": "auto"}},
-		"band5_1": map[string]any{"host": host(true, "Atlantis"), "guest": host(true, "Atlantis Guest"), "iot": host(false, "Atlantis IoT"), "radio": map[string]any{"enable": true, "channel": "36"}},
-		"band6":   map[string]any{"host": host(true, "Atlantis"), "guest": host(false, "Atlantis Guest"), "radio": map[string]any{"enable": true, "channel": "auto"}},
+		"band2_4": map[string]any{"host": host(), "guest": guest(true), "iot": iot(true), "radio": map[string]any{"enable": true, "channel": "auto"}},
+		"band5_1": map[string]any{"host": host(), "guest": guest(true), "iot": iot(false), "radio": map[string]any{"enable": true, "channel": "36"}},
+		"band6":   map[string]any{"host": host(), "guest": guest(false), "radio": map[string]any{"enable": true, "channel": "auto"}},
 	})
 	d.SetResult(tmp.OpFWLatestGet, map[string]any{"fw_list": []any{
 		map[string]any{"device_model": "M5", "version": "1.9.5 Build 20260602", "need_to_upgrade": true, "device_id_list": []string{"node-garage"},

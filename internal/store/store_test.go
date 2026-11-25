@@ -205,3 +205,43 @@ func TestRollupMergeKeepsLoad(t *testing.T) {
 		t.Fatalf("%+v", pts)
 	}
 }
+
+func TestAddAndRemoveNetwork(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	if _, ok, err := s.GetNetwork(ctx); ok || err != nil {
+		t.Fatalf("a new database has no Deco: ok=%v err=%v", ok, err)
+	}
+	n, err := s.SaveNetwork(ctx, Network{Host: "192.0.2.1", Port: 20001, Transport: "ssh", Email: "a@example.com", PasswordEnc: "v1:x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.Host, n.PasswordEnc = "192.0.2.9", "v1:y"
+	if _, err := s.SaveNetwork(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, _ := s.GetNetwork(ctx)
+	if !ok || got.ID != n.ID || got.Host != "192.0.2.9" || got.Port != 20001 || got.PasswordEnc != "v1:y" {
+		t.Fatalf("%+v", got)
+	}
+
+	s.SaveNodes(ctx, n.ID, []deco.Device{{ID: "m", Master: true, Online: true}})
+	s.SaveClients(ctx, n.ID, []deco.WifiClient{{MAC: "aa:bb:cc:dd:ee:01", Online: true}}, map[string]bool{"aa:bb:cc:dd:ee:01": true})
+	s.AddSamples(ctx, n.ID, []NodeSample{{NodeID: "m", Online: true}}, []ClientSample{{MAC: "aa:bb:cc:dd:ee:01", Online: true}})
+	s.AddEvent(ctx, n.ID, Event{Type: "client.joined", Subject: "aa:bb:cc:dd:ee:01"})
+	s.SetSetting(ctx, "poll", map[string]int{"fast": 30})
+
+	if err := s.DeleteNetwork(ctx, n.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, tbl := range append(networkTables, "networks") {
+		var k int
+		s.db.QueryRow(`SELECT COUNT(*) FROM ` + tbl).Scan(&k)
+		if k != 0 {
+			t.Errorf("%s still has %d rows", tbl, k)
+		}
+	}
+	if ok, _ := s.GetSetting(ctx, "poll", new(map[string]int)); !ok {
+		t.Error("settings are not per site and must stay")
+	}
+}

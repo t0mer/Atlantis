@@ -73,6 +73,13 @@ func New(known map[string]bool, offlineAfter int) *Engine {
 	return e
 }
 
+// SetOfflineAfter changes how many polls a client must be missing before it
+// is reported offline.
+func (e *Engine) SetOfflineAfter(n int) { e.offlineAfter = max(n, 1) }
+
+// OfflineAfter returns the current threshold.
+func (e *Engine) OfflineAfter() int { return e.offlineAfter }
+
 func clientPayload(c deco.WifiClient) map[string]any {
 	return map[string]any{"name": c.Name, "ip": c.IP, "node": c.NodeID, "band": c.Band, "network": c.Network, "wired": c.Wired}
 }

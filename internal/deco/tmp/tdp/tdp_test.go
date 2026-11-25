@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"hash/crc32"
 	"net"
+	"os"
 	"strings"
 	"testing"
 )
@@ -69,9 +71,7 @@ func TestSSHPortRules(t *testing.T) {
 	if i.SSHPort() != 20001 {
 		t.Fatal("tmp_port[0]")
 	}
-	i.TPAP = &struct {
-		Port int `json:"port"`
-	}{Port: 443}
+	i.TPAP = &TPAP{Port: 443}
 	if i.SSHPort() != 443 {
 		t.Fatal("tpap.port wins")
 	}
@@ -85,5 +85,37 @@ func TestParseReplyRejectsCorruption(t *testing.T) {
 	}
 	if _, err := parseReply(reply(7, `{"error_code":-1}`), 7); err == nil {
 		t.Fatal("error_code must be reported")
+	}
+}
+
+func TestSSHAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name, result string
+		ssh          bool
+		port         int
+	}{
+		{"M5: no tpap", "testdata/m5.json", true, 20001},
+		{"tpap without pake or noc", `{"tmp_port":[20001],"tpap":{"port":20443,"tls":1}}`, true, 20443},
+		{"null capabilities", `{"tpap":{"port":20443,"pake":null,"noc":null}}`, true, 20443},
+		{"SPAKE2+", `{"tmp_port":[20001],"tpap":{"port":443,"pake":[1]}}`, false, 443},
+		{"NOC", `{"tpap":{"port":443,"noc":1}}`, false, 443},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := tc.result
+			if strings.HasPrefix(body, "testdata/") {
+				b, err := os.ReadFile(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body = string(b)
+			}
+			var i Info
+			if err := json.Unmarshal([]byte(body), &i); err != nil {
+				t.Fatal(err)
+			}
+			if i.SSHAccess() != tc.ssh || i.SSHPort() != tc.port {
+				t.Fatalf("ssh=%v port=%d", i.SSHAccess(), i.SSHPort())
+			}
+		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,7 +26,7 @@ import (
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
 	"github.com/t0mer/atlantis/internal/secret"
-	"github.com/t0mer/atlantis/internal/session"
+	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
 )
 
@@ -59,10 +60,24 @@ func (f *fakeDeco) Firmware(context.Context) ([]deco.Firmware, error) { return n
 func (f *fakeDeco) Raw(context.Context, string, string) (json.RawMessage, error) {
 	return json.RawMessage(`{"ok":true}`), nil
 }
-func (f *fakeDeco) SetHostWiFi(_ context.Context, ssid, _ string) ([]string, error) {
+func (f *fakeDeco) Editable() map[string][]string {
+	return map[string][]string{"host": {deco.FieldSSID, deco.FieldPassword}}
+}
+func (f *fakeDeco) SetNetwork(_ context.Context, p deco.WirelessPatch) ([]string, error) {
+	for _, fl := range p.Fields() {
+		if !slices.Contains(f.Editable()[p.Network], fl) {
+			return nil, deco.ErrNotVerified
+		}
+	}
+	if p.SSID != nil && *p.SSID == "" {
+		return nil, deco.Invalid("SSID must be 1-32 bytes of text")
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.ssid, f.wifiSets = ssid, f.wifiSets+1
+	if p.SSID != nil {
+		f.ssid = *p.SSID
+	}
+	f.wifiSets++
 	return []string{"band2_4"}, nil
 }
 
@@ -82,26 +97,36 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	n, _ := st.EnsureNetwork(ctx, store.Network{Host: "192.0.2.1", Transport: "ssh"})
-	cfg := &config.Config{Deco: config.Deco{Host: "192.0.2.1", Transport: "ssh"}, Poll: config.Poll{Fast: time.Minute, Slow: time.Minute, OfflineAfterMisses: 2},
+	box, _ := secret.New(secret.NewKey())
+	sealed, _ := box.Seal("decopass")
+	st.SaveNetwork(ctx, store.Network{Host: "192.0.2.1", Transport: "ssh", Email: "owner@example.com", PasswordEnc: sealed})
+	cfg := &config.Config{Deco: config.Deco{Transport: "ssh"}, Poll: config.Poll{Fast: time.Minute, Slow: time.Minute, OfflineAfterMisses: 2},
 		Store: config.Store{RawRetention: time.Hour, RollupRetention: 2 * time.Hour}, Metrics: config.Metrics{Path: "/metrics", PerClient: "all"},
 		Notify: config.Notify{Timezone: "UTC"}, Debug: config.Debug{Enabled: true}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	f := &fakeDeco{ssid: "old"}
-	sess := session.New(f, nil)
 	hub := poller.NewHub()
-	box, _ := secret.New(secret.NewKey())
 	disp := notify.New(st, box, cfg, func() string { return "Home" }, log)
 	m := metrics.New("all")
-	p, err := poller.New(ctx, poller.Options{NetworkID: n.ID, Fast: time.Minute, Slow: time.Minute, OfflineAfter: 2, RawRetention: time.Hour, RollupRetention: 2 * time.Hour},
-		sess, st, disp, m, hub, log)
-	if err != nil {
+	sctx, cancel := context.WithCancel(ctx)
+	sites := site.New(sctx, site.Deps{Config: cfg, Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log,
+		Build: func(context.Context, store.Network, string, *site.HostKeys, func(string), *slog.Logger) (deco.Client, *site.Discovery, error) {
+			return f, &site.Discovery{Model: "M5", Role: "master", Port: 20001}, nil
+		}})
+	if err := sites.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	p.Slow(ctx)
-	p.Fast(ctx)
-	s := New(Deps{Config: cfg, Store: st, NetworkID: n.ID, Session: sess, Poller: p, Hub: hub, Notify: disp, Metrics: m.Handler(), Version: "test", Log: log,
-		AcceptHostKey: func(context.Context) error { return nil }})
+	t.Cleanup(func() { cancel(); sites.Close(context.Background()) })
+	// Run polls once straight away; wait for that first pass.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if snap := sites.Current().Poller.Snapshot(); !snap.FastAt.IsZero() && !snap.SlowAt.IsZero() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first poll did not finish")
+		}
+	}
+	s := New(Deps{Config: cfg, Store: st, Site: sites, Hub: hub, Notify: disp, Metrics: m.Handler(), Version: "test", Log: log})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
@@ -242,14 +267,21 @@ func TestWritesAreGuarded(t *testing.T) {
 	if code, _, _ := e.do(t, "POST", "/api/v1/nodes/m/reboot", "", true); code != 501 {
 		t.Fatal("unverified reboot must answer 501")
 	}
-	if code, _, _ := e.do(t, "PATCH", "/api/v1/wifi", `{"band":"band2_4","network":"guest","enable":true}`, true); code != 501 {
+	if code, _, _ := e.do(t, "PATCH", "/api/v1/wifi", `{"bands":["band2_4"],"network":"guest","enable":true}`, true); code != 501 {
 		t.Fatal("unverified Wi-Fi toggle must answer 501")
+	}
+	if code, _, _ := e.do(t, "PATCH", "/api/v1/wifi", `{"network":"host","ssid":""}`, true); code != 400 {
+		t.Fatal("an invalid change must answer 400")
+	}
+	_, w, _ := e.do(t, "GET", "/api/v1/wifi", "", false)
+	if ed, _ := w["editable"].(map[string]any); len(ed) != 1 || ed["host"] == nil {
+		t.Fatalf("editable: %v", w["editable"])
 	}
 	if code, _, _ := e.do(t, "PATCH", "/api/v1/wifi", `{"network":"guest","ssid":"x","password":"longenough"}`, true); code != 501 {
 		t.Fatal("writes to other networks must answer 501")
 	}
 	code, m, raw := e.do(t, "PATCH", "/api/v1/wifi", `{"network":"host","ssid":"Test-SSID","password":"test-pass-123"}`, true)
-	if code != 200 || e.fake.wifiSets != 1 || e.fake.ssid != "Test-SSID" {
+	if code != 200 || e.fake.wifiSets != 1 || e.fake.ssid != "Test-SSID" { // the rejected patches never reached the device
 		t.Fatalf("%d %s", code, raw)
 	}
 	if strings.Contains(raw, "test-pass-123") {
@@ -257,7 +289,7 @@ func TestWritesAreGuarded(t *testing.T) {
 	}
 	_ = m
 	_, _, audit := e.do(t, "GET", "/api/v1/audit", "", false)
-	if !strings.Contains(audit, "wifi.set_host") || strings.Contains(audit, "test-pass-123") {
+	if !strings.Contains(audit, "network=host fields=ssid,password ssid=Test-SSID") || strings.Contains(audit, "test-pass-123") {
 		t.Fatalf("audit: %s", audit)
 	}
 }
@@ -302,7 +334,7 @@ func TestSessionControls(t *testing.T) {
 		t.Fatalf("%v", m)
 	}
 	_, m, _ = e.do(t, "POST", "/api/v1/session/resume", "", true)
-	if m["state"] != "idle" {
+	if m["state"] != "idle" && m["state"] != "connected" { // the poller may already have reconnected
 		t.Fatalf("%v", m)
 	}
 	if code, _, _ := e.do(t, "POST", "/api/v1/session/accept-host-key", "", true); code != 200 {

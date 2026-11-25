@@ -23,11 +23,10 @@ for _ in $(seq 100); do # the fake listens once any seeding is done
   sleep 0.1
 done
 
+# No Deco is configured: the tests add the pretend one from the UI.
 ATLANTIS_SECRET_KEY="$(bin/atlantis keygen)" \
 ATLANTIS_SERVER_LISTEN="127.0.0.1:$API_PORT" \
 ATLANTIS_STORE_PATH="$DIR/atlantis.db" \
-ATLANTIS_DECO_HOST=127.0.0.1 ATLANTIS_DECO_PORT="$FAKE_PORT" \
-ATLANTIS_DECO_EMAIL=demo@example.com ATLANTIS_DECO_PASSWORD=demo-password \
 ATLANTIS_POLL_FAST=10s ATLANTIS_LOG_FORMAT=text \
   bin/atlantis serve >"$DIR/serve.log" 2>&1 &
 pids+=($!)
@@ -39,6 +38,6 @@ for _ in $(seq 50); do
 done
 [ -n "$up" ] || { echo "atlantis serve did not start:"; cat "$DIR/serve.log"; exit 1; }
 
-cd web && ATLANTIS_URL="http://127.0.0.1:$API_PORT" npx playwright test "$@" || {
+cd web && ATLANTIS_URL="http://127.0.0.1:$API_PORT" DECO_PORT="$FAKE_PORT" npx playwright test "$@" || {
   echo "--- serve log ---"; tail -50 "$DIR/serve.log"; exit 1
 }

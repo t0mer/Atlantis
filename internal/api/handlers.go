@@ -18,6 +18,8 @@ import (
 	"github.com/t0mer/atlantis/internal/events"
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
+	"github.com/t0mer/atlantis/internal/session"
+	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
 )
 
@@ -25,12 +27,12 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.Version})
 }
 
-func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
-	snap := s.Poller.Snapshot()
-	st := s.Session.Status()
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	snap := runOf(r.Context()).Poller.Snapshot()
+	st := runOf(r.Context()).Session.Status()
 	out := map[string]any{"session": st, "last_fast_poll": snap.FastAt, "last_slow_poll": snap.SlowAt}
 	code := http.StatusOK
-	if snap.SlowAt.IsZero() || s.now().Sub(snap.SlowAt) > 3*s.Config.Poll.Slow {
+	if snap.SlowAt.IsZero() || s.now().Sub(snap.SlowAt) > 3*s.Site.Poll().Slow {
 		code = http.StatusServiceUnavailable
 	}
 	writeJSON(w, code, out)
@@ -38,7 +40,7 @@ func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
 
 // clientCounts counts online clients by connection.
 func clientCounts(cs []deco.WifiClient) map[string]int {
-	out := map[string]int{"total": 0, "wired": 0, "guest": 0, "band2_4": 0, "band5": 0, "band6": 0}
+	out := map[string]int{"total": 0, "wired": 0, "guest": 0, "band2_4": 0, "band5": 0, "band6": 0, "band60": 0}
 	for _, c := range cs {
 		if !c.Online {
 			continue
@@ -51,6 +53,8 @@ func clientCounts(cs []deco.WifiClient) map[string]int {
 			out["band2_4"]++
 		case strings.HasPrefix(c.Band, "band5"):
 			out["band5"]++
+		case c.Band == "band60":
+			out["band60"]++
 		case strings.HasPrefix(c.Band, "band6"):
 			out["band6"]++
 		}
@@ -62,7 +66,7 @@ func clientCounts(cs []deco.WifiClient) map[string]int {
 }
 
 func (s *Server) network(w http.ResponseWriter, r *http.Request) {
-	snap := s.Poller.Snapshot()
+	snap := runOf(r.Context()).Poller.Snapshot()
 	online := 0
 	var internet *bool
 	for _, n := range snap.Nodes {
@@ -75,8 +79,8 @@ func (s *Server) network(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"host":                  s.Config.Deco.Host,
-		"session":               s.Session.Status(),
+		"host":                  runOf(r.Context()).Network.Host,
+		"session":               runOf(r.Context()).Session.Status(),
 		"internet_online":       internet,
 		"wan":                   snap.WAN,
 		"wan_supported":         snap.WANSupported,
@@ -97,11 +101,11 @@ type nodeView struct {
 }
 
 func (s *Server) nodeViews(ctx context.Context) ([]nodeView, error) {
-	stored, err := s.store.Nodes(ctx, s.NetworkID)
+	stored, err := s.store.Nodes(ctx, runOf(ctx).Network.ID)
 	if err != nil {
 		return nil, err
 	}
-	snap := s.Poller.Snapshot()
+	snap := runOf(ctx).Poller.Snapshot()
 	live := map[string]deco.Device{}
 	for _, n := range snap.Nodes {
 		live[n.ID] = n
@@ -164,7 +168,7 @@ func (s *Server) node(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such node")
 		return
 	}
-	hist, err := s.store.NodeHistory(r.Context(), s.NetworkID, id, since)
+	hist, err := s.store.NodeHistory(r.Context(), runOf(r.Context()).Network.ID, id, since)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -205,12 +209,12 @@ func privateMAC(mac string) bool {
 }
 
 func (s *Server) clientViews(ctx context.Context) ([]clientView, error) {
-	stored, err := s.store.Clients(ctx, s.NetworkID)
+	stored, err := s.store.Clients(ctx, runOf(ctx).Network.ID)
 	if err != nil {
 		return nil, err
 	}
 	live := map[string]deco.WifiClient{}
-	for _, c := range s.Poller.Snapshot().Clients {
+	for _, c := range runOf(ctx).Poller.Snapshot().Clients {
 		live[c.MAC] = c
 	}
 	out := make([]clientView, 0, len(stored))
@@ -270,7 +274,7 @@ func (s *Server) client(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such client")
 		return
 	}
-	hist, err := s.store.ClientHistory(r.Context(), s.NetworkID, mac, since)
+	hist, err := s.store.ClientHistory(r.Context(), runOf(r.Context()).Network.ID, mac, since)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -292,7 +296,7 @@ func (s *Server) patchClient(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "alias up to 64 characters and up to 20 tags")
 		return
 	}
-	c, err := s.store.UpdateClientMeta(r.Context(), s.NetworkID, mac, store.ClientMeta{Alias: body.Alias, Watch: body.Watch, Tags: body.Tags})
+	c, err := s.store.UpdateClientMeta(r.Context(), runOf(r.Context()).Network.ID, mac, store.ClientMeta{Alias: body.Alias, Watch: body.Watch, Tags: body.Tags})
 	s.audit(r.Context(), userFrom(r.Context()), "client.update", mac, err)
 	if err != nil {
 		s.fail(w, err)
@@ -301,61 +305,71 @@ func (s *Server) patchClient(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"mac": c.MAC, "alias": c.Alias, "watch": c.Watch, "tags": c.Tags})
 }
 
-func (s *Server) wifi(w http.ResponseWriter, _ *http.Request) {
-	snap := s.Poller.Snapshot()
+// wifiView is the Wi-Fi settings plus which fields Atlantis may change per
+// network (only writes verified on a real Deco).
+type wifiView struct {
+	*deco.WirelessConfig
+	Editable map[string][]string `json:"editable"`
+}
+
+func (s *Server) wifi(w http.ResponseWriter, r *http.Request) {
+	run := runOf(r.Context())
+	snap := run.Poller.Snapshot()
 	if snap.Wireless == nil {
 		writeError(w, http.StatusServiceUnavailable, "no Wi-Fi data yet")
 		return
 	}
-	writeJSON(w, http.StatusOK, snap.Wireless)
+	v := wifiView{WirelessConfig: snap.Wireless, Editable: map[string][]string{}}
+	if ww, ok := run.Session.Client().(deco.WiFiWriter); ok {
+		v.Editable = ww.Editable()
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
-// patchWiFi changes the main network's SSID and password, the only Wi-Fi
-// write verified on hardware. Toggling networks is not available yet.
+// patchWiFi changes one Wi-Fi network. Fields not yet verified on a Deco
+// answer 501.
 func (s *Server) patchWiFi(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Network  string `json:"network"`
-		Band     string `json:"band"`
-		Enable   *bool  `json:"enable"`
-		SSID     string `json:"ssid"`
-		Password string `json:"password"`
-	}
-	if !readJSON(w, r, &body) {
+	var p deco.WirelessPatch
+	if !readJSON(w, r, &p) {
 		return
 	}
-	if body.Enable != nil || body.Band != "" || (body.Network != "" && body.Network != "host") {
-		notVerified(w, r) // only the main network's SSID/password is verified
-		return
-	}
-	if body.Network != "host" || body.SSID == "" || body.Password == "" {
-		writeError(w, http.StatusBadRequest, `send {"network":"host","ssid":"...","password":"..."}`)
-		return
-	}
+	run := runOf(r.Context())
 	var bands []string
-	err := s.Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {
+	err := run.Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {
 		ww, ok := c.(deco.WiFiWriter)
 		if !ok {
 			return deco.ErrUnsupported
 		}
 		var err error
-		bands, err = ww.SetHostWiFi(ctx, body.SSID, body.Password)
+		bands, err = ww.SetNetwork(ctx, p)
 		return err
 	})
-	s.audit(r.Context(), userFrom(r.Context()), "wifi.set_host", "ssid="+body.SSID, err)
-	if err != nil {
-		if errors.Is(err, deco.ErrUnsupported) {
-			s.fail(w, err)
-			return
-		}
+	target := "network=" + p.Network + " fields=" + strings.Join(p.Fields(), ",")
+	if p.SSID != nil {
+		target += " ssid=" + *p.SSID
+	}
+	s.audit(r.Context(), userFrom(r.Context()), "wifi.set", target, err)
+	switch {
+	case err == nil:
+	case errors.Is(err, deco.ErrNotVerified):
+		writeError(w, http.StatusNotImplemented, "not available yet: "+err.Error())
+		return
+	case errors.Is(err, deco.ErrInvalid):
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	case errors.Is(err, deco.ErrUnsupported), errors.Is(err, session.ErrClosed):
+		s.fail(w, err)
+		return
+	default:
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.Poller.Refresh()
-	writeJSON(w, http.StatusOK, map[string]any{"ssid": body.SSID, "bands": bands})
+	run.Poller.Refresh()
+	writeJSON(w, http.StatusOK, map[string]any{"network": p.Network, "bands": bands})
 }
 
-func (s *Server) firmware(w http.ResponseWriter, _ *http.Request) {
-	fw := s.Poller.Snapshot().Firmware
+func (s *Server) firmware(w http.ResponseWriter, r *http.Request) {
+	fw := runOf(r.Context()).Poller.Snapshot().Firmware
 	if fw == nil {
 		fw = []deco.Firmware{}
 	}
@@ -376,7 +390,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("limit"); v != "" {
 		f.Limit, _ = strconv.Atoi(v)
 	}
-	ev, err := s.store.Events(r.Context(), s.NetworkID, f)
+	ev, err := s.store.Events(r.Context(), runOf(r.Context()).Network.ID, f)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -389,16 +403,63 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 // settings shows the effective, non-secret configuration. Changing it is
 // done in the YAML file or environment for now.
-func (s *Server) settings(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	c := s.Config
+	n, _, err := s.store.GetNetwork(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	p := s.Site.Poll()
+	source := "config"
+	if p.FromUI {
+		source = "ui"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"deco":    map[string]any{"transport": c.Deco.Transport, "host": c.Deco.Host, "port": c.Deco.Port, "email": c.Deco.Email},
-		"poll":    map[string]any{"fast": c.Poll.Fast.String(), "slow": c.Poll.Slow.String(), "offline_after_misses": c.Poll.OfflineAfterMisses},
+		"deco":    map[string]any{"transport": n.Transport, "host": n.Host, "port": n.Port, "email": n.Email},
+		"poll":    map[string]any{"fast": p.Fast.String(), "slow": p.Slow.String(), "offline_after_misses": p.OfflineAfterMisses, "source": source},
 		"store":   map[string]any{"raw_retention": c.Store.RawRetention.String(), "rollup_retention": c.Store.RollupRetention.String()},
 		"metrics": map[string]any{"enabled": c.Metrics.Enabled, "path": c.Metrics.Path, "per_client": c.Metrics.PerClient},
 		"notify":  map[string]any{"quiet_hours": c.Notify.QuietHours, "timezone": c.Notify.Timezone, "events": events.All},
 		"version": s.Version,
 	})
+}
+
+// putSettings changes the refresh intervals. Other settings stay in the
+// YAML file and environment.
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Poll *struct {
+			Fast               string `json:"fast"`
+			Slow               string `json:"slow"`
+			OfflineAfterMisses int    `json:"offline_after_misses"`
+		} `json:"poll"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if body.Poll == nil {
+		writeError(w, http.StatusBadRequest, "nothing to change: send poll")
+		return
+	}
+	fast, err1 := time.ParseDuration(body.Poll.Fast)
+	slow, err2 := time.ParseDuration(body.Poll.Slow)
+	if err1 != nil || err2 != nil {
+		writeError(w, http.StatusBadRequest, `intervals are durations such as "30s" or "5m"`)
+		return
+	}
+	p := site.Poll{Fast: fast, Slow: slow, OfflineAfterMisses: body.Poll.OfflineAfterMisses}
+	err := s.Site.SetPoll(r.Context(), p)
+	s.audit(r.Context(), userFrom(r.Context()), "settings.poll", fmt.Sprintf("fast=%s slow=%s offline_after=%d", fast, slow, p.OfflineAfterMisses), err)
+	if errors.Is(err, site.ErrInvalid) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.settings(w, r)
 }
 
 // channelView never includes the sealed config; secrets are write-only.
@@ -609,8 +670,8 @@ func (s *Server) sendTest(w http.ResponseWriter, r *http.Request, c store.Channe
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (s *Server) sessionStatus(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.Session.Status())
+func (s *Server) sessionStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, runOf(r.Context()).Session.Status())
 }
 
 // releaseSession logs out of the Deco for ?minutes= (default 10) so the
@@ -622,44 +683,40 @@ func (s *Server) releaseSession(w http.ResponseWriter, r *http.Request) {
 			mins = n
 		}
 	}
-	err := s.Session.Release(r.Context(), time.Duration(mins)*time.Minute)
+	err := runOf(r.Context()).Session.Release(r.Context(), time.Duration(mins)*time.Minute)
 	s.audit(r.Context(), userFrom(r.Context()), "session.release", fmt.Sprintf("%dm", mins), err)
-	s.Hub.Publish(poller.Message{Kind: "session", Data: s.Session.Status()})
-	writeJSON(w, http.StatusOK, s.Session.Status())
+	s.Hub.Publish(poller.Message{Kind: "session", Data: runOf(r.Context()).Session.Status()})
+	writeJSON(w, http.StatusOK, runOf(r.Context()).Session.Status())
 }
 
 func (s *Server) pauseSession(w http.ResponseWriter, r *http.Request) {
-	err := s.Session.Pause(r.Context())
+	err := runOf(r.Context()).Session.Pause(r.Context())
 	s.audit(r.Context(), userFrom(r.Context()), "session.pause", "", err)
-	s.Hub.Publish(poller.Message{Kind: "session", Data: s.Session.Status()})
-	writeJSON(w, http.StatusOK, s.Session.Status())
+	s.Hub.Publish(poller.Message{Kind: "session", Data: runOf(r.Context()).Session.Status()})
+	writeJSON(w, http.StatusOK, runOf(r.Context()).Session.Status())
 }
 
 func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
-	s.Session.Resume()
+	runOf(r.Context()).Session.Resume()
 	s.audit(r.Context(), userFrom(r.Context()), "session.resume", "", nil)
-	s.Poller.Refresh()
-	writeJSON(w, http.StatusOK, s.Session.Status())
+	runOf(r.Context()).Poller.Refresh()
+	writeJSON(w, http.StatusOK, runOf(r.Context()).Session.Status())
 }
 
 func (s *Server) acceptHostKey(w http.ResponseWriter, r *http.Request) {
-	if s.AcceptHostKey == nil {
-		notVerified(w, r)
-		return
-	}
-	err := s.AcceptHostKey(r.Context())
-	s.audit(r.Context(), userFrom(r.Context()), "session.accept_host_key", s.Config.Deco.Host, err)
-	if errors.Is(err, ErrRestartRequired) {
-		writeError(w, http.StatusConflict, "the pinned certificate was cleared; restart Atlantis to trust the new one")
-		return
-	}
+	run := runOf(r.Context())
+	err := s.Site.AcceptHostKey(r.Context())
+	s.audit(r.Context(), userFrom(r.Context()), "session.accept_host_key", run.Network.Host, err)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	s.Session.ClearCert() // never clears auth_failed
-	s.Poller.Refresh()
-	writeJSON(w, http.StatusOK, s.Session.Status())
+	cur := s.Site.Current()
+	if cur == nil {
+		s.fail(w, site.ErrNoDeco)
+		return
+	}
+	writeJSON(w, http.StatusOK, cur.Session.Status())
 }
 
 func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
@@ -697,8 +754,10 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		fl.Flush()
 		return true
 	}
-	send(poller.Message{Kind: "snapshot", Data: s.Poller.Snapshot()})
-	send(poller.Message{Kind: "session", Data: s.Session.Status()})
+	if run := s.Site.Current(); run != nil {
+		send(poller.Message{Kind: "snapshot", Data: run.Poller.Snapshot()})
+		send(poller.Message{Kind: "session", Data: run.Session.Status()})
+	}
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
 	for {
@@ -722,7 +781,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) debugRaw(w http.ResponseWriter, r *http.Request) {
 	area, form := r.URL.Query().Get("area"), r.URL.Query().Get("form")
 	var raw json.RawMessage
-	err := s.Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {
+	err := runOf(r.Context()).Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {
 		var err error
 		raw, err = c.Raw(ctx, area, form)
 		return err

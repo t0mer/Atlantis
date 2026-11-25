@@ -37,7 +37,9 @@ It is a single Go binary with the web UI built in. It runs on a Raspberry Pi, a 
 - **Clients.** Search and filter by online state, Deco, band, network (main, guest, IoT) and watched. Each device shows its current speed, a 24-hour strip and a detail page with presence, throughput and connection history over 24 hours, 7 days or 30 days.
 - **Names that stay yours.** Give a device a name, tags and a "watch" flag. These are stored in Atlantis; the Deco is not changed.
 - **Decos.** Model, firmware (with a notice when an update is available), IP and MAC, role, backhaul, and the devices connected to each one.
-- **Wi-Fi.** Every band and network with its name and state. You can change the main network's name and password on all bands, after typing `CHANGE` to confirm.
+- **Connect from the browser.** Atlantis starts without a Deco. Add the main Deco's address and your TP-Link ID on the first page, and change or remove it later in Settings. Atlantis signs in to check the details before it saves them.
+- **Wi-Fi.** Every band and network with its name, security and state. Turn the guest and IoT networks on or off and change their name and password (and the guest network's security). Change the main network's name and password on all bands, after typing `CHANGE` to confirm. Only changes that have been tested on a real Deco are offered (see [Wi-Fi changes](#wi-fi-changes)).
+- **Refresh times you set.** Choose how often devices and the mesh are checked in Settings; the change applies at once.
 - **Events.** A timeline of devices joining, coming and going, Decos going offline, internet outages, public IP changes and firmware updates.
 - **Notifications** through [Shoutrrr](https://containrrr.dev/shoutrrr/) (Telegram, Discord, Slack, ntfy, email and more) or WhatsApp through [OpenWA](https://github.com/open-wa/wa-automate-nodejs). Each channel picks which events it sends and can be limited to watched devices. Messages use templates, and there are quiet hours.
 - **Prometheus metrics** for Decos, clients, the internet connection and Atlantis's own polling.
@@ -46,6 +48,10 @@ It is a single Go binary with the web UI built in. It runs on a Raspberry Pi, a 
 - Live updates, light and dark mode, a phone layout, and correct display of Hebrew and other right-to-left names.
 
 ## Screenshots
+
+### Connect your Deco
+
+![Connect your Deco](assets/screenshots/connect.png)
 
 ### Clients
 
@@ -66,6 +72,10 @@ It is a single Go binary with the web UI built in. It runs on a Raspberry Pi, a 
 ### Wi-Fi
 
 ![Wi-Fi](assets/screenshots/wifi.png)
+
+Each network has its own panel. The guest network can be turned on or off and edited:
+
+![Edit the guest network](assets/screenshots/wifi-edit.png)
 
 Changing the main network asks for a typed confirmation:
 
@@ -119,15 +129,23 @@ Atlantis polls the Deco on two loops:
 - **Fast loop** (default every 30 seconds): clients and their speeds.
 - **Slow loop** (default every 5 minutes): Decos, the internet connection, Wi-Fi and firmware.
 
+Both can be changed in **Settings → Refresh** while Atlantis runs.
+
 Each result is stored and compared with the previous one. The changes become events, which go to the event log, to notifications and to every open browser over a live stream.
 
 **One admin at a time.** A Deco accepts one admin session. While Atlantis is signed in, the Deco app may be signed out, and the reverse. When that happens, Atlantis backs off and shows the state at the top of every page. **Release for the app** signs Atlantis out for 10 minutes (or an hour from Settings) and then signs back in by itself.
 
 ## Requirements
 
-- A TP-Link Deco mesh whose main unit is reachable from the machine running Atlantis. Atlantis has been tested with a Deco M5 on firmware 1.9.1.
+- A TP-Link Deco mesh whose main unit is reachable from the machine running Atlantis. Atlantis has been tested with a Deco M5 on firmware 1.9.1. See [Supported Decos](#supported-decos).
 - For the `ssh` transport (the default): the **TP-Link ID** (email and password) that owns the Deco network in the Deco app.
 - Docker, or a Linux machine (amd64, arm64 or armv7) for the binary.
+
+### Supported Decos
+
+Atlantis speaks the Deco app's local protocol over SSH. It works with any Deco model and firmware that still accepts that connection, whatever its bands: bands and networks are read from the Deco, not from a model list. The Deco says which connections it accepts when Atlantis asks it on the LAN (TDP discovery).
+
+Newer models and firmware may accept only TP-Link's newer encrypted connection (TLS with SPAKE2+ or device certificates). Atlantis does not support that yet. When you add such a Deco, it says so instead of retrying. Support is planned.
 
 **Finding the Deco's address.** It is your network's default gateway: in the Deco app, open the main Deco and look at its IP address, or run `ip route | grep default` on a Linux machine. Many networks use `192.168.68.1`.
 
@@ -141,28 +159,25 @@ docker run --rm techblog/atlantis keygen
 
 ### Docker Compose
 
-Save [`docker-compose.yml`](docker-compose.yml), set the Deco address in it, and put the secrets in a `.env` file next to it:
+Save [`docker-compose.yml`](docker-compose.yml) and put the secret key in a `.env` file next to it:
 
 ```sh
 ATLANTIS_SECRET_KEY=<output of keygen>
-ATLANTIS_DECO_EMAIL=you@example.com
-ATLANTIS_DECO_PASSWORD=<your TP-Link ID password>
 ```
 
 ```sh
 docker compose up -d
 ```
 
-Open `http://<host>:8080` and create the admin account. That account is for Atlantis itself and is not your TP-Link ID.
+Open `http://<host>:8080` and create the admin account. That account is for Atlantis itself and is not your TP-Link ID. Atlantis then asks for the main Deco's address and your TP-Link ID.
+
+You can also set the Deco in the environment instead (`ATLANTIS_DECO_HOST`, `ATLANTIS_DECO_EMAIL` and `ATLANTIS_DECO_PASSWORD`); they are used on the first start only, and the compose file shows them commented out.
 
 ### Docker
 
 ```sh
 docker run -d --name atlantis -p 8080:8080 -v atlantis-data:/data \
   -e ATLANTIS_SECRET_KEY=... \
-  -e ATLANTIS_DECO_HOST=192.168.68.1 \
-  -e ATLANTIS_DECO_EMAIL=you@example.com \
-  -e ATLANTIS_DECO_PASSWORD=... \
   --restart unless-stopped techblog/atlantis:latest
 ```
 
@@ -175,9 +190,7 @@ Download the archive for your platform from [Releases](https://github.com/t0mer/
 ```sh
 tar xzf atlantis_*_linux_arm64.tar.gz
 export ATLANTIS_SECRET_KEY="$(./atlantis keygen)"   # store this somewhere safe
-ATLANTIS_STORE_PATH=./atlantis.db ATLANTIS_DECO_HOST=192.168.68.1 \
-ATLANTIS_DECO_EMAIL=you@example.com ATLANTIS_DECO_PASSWORD=... \
-  ./atlantis serve
+ATLANTIS_STORE_PATH=./atlantis.db ./atlantis serve
 ```
 
 ### From source
@@ -193,7 +206,9 @@ make web build        # builds the UI, then bin/atlantis with the UI built in
 
 Settings come from environment variables, an optional YAML file, and built-in defaults. **Environment variables win over the YAML file.** The YAML file is passed with `atlantis serve --config atlantis.yaml` or `ATLANTIS_CONFIG`. Each environment variable is `ATLANTIS_` followed by the key in capitals, with dots replaced by underscores. For example, `deco.host` becomes `ATLANTIS_DECO_HOST`.
 
-The Deco password is encrypted into the database on the first start. After that you can remove it from the environment or the file; set it again only to change it.
+The Deco is usually added in the browser, and its settings are then kept in the database (the password encrypted). The `deco.*` settings below are optional. When `deco.host` is set and no Deco is stored yet, Atlantis stores that Deco on start, as if it had been added in the browser, with the password encrypted. From then on the browser owns the connection: a restart never undoes a change made in **Settings → Deco**, and a Deco removed there stays removed unless `deco.host` is still configured. Change the address or password in Settings, not in the configuration.
+
+Refresh times saved in **Settings → Refresh** override `poll.*`.
 
 | Key | Environment variable | Default | Description |
 |---|---|---|---|
@@ -202,15 +217,15 @@ The Deco password is encrypted into the database on the first start. After that 
 | `server.base_url` | `ATLANTIS_SERVER_BASE_URL` | | The public URL. An `https://` URL makes the session cookie `Secure`. |
 | `server.trusted_proxies` | `ATLANTIS_SERVER_TRUSTED_PROXIES` | | Reverse proxies whose forwarded client address is trusted. |
 | `deco.transport` | `ATLANTIS_DECO_TRANSPORT` | `ssh` | `ssh` (the Deco app's protocol) or `luci` (the local web API). |
-| `deco.host` | `ATLANTIS_DECO_HOST` | **required** | The main Deco's IP address or host name. |
+| `deco.host` | `ATLANTIS_DECO_HOST` | | The main Deco's IP address or host name. Optional: the Deco can be added in the browser. Used only while no Deco is stored. |
 | `deco.port` | `ATLANTIS_DECO_PORT` | `0` | SSH port. `0` asks the Deco (TDP discovery), then falls back to `20001`. |
-| `deco.email` | `ATLANTIS_DECO_EMAIL` | required for `ssh` | Your TP-Link ID email. |
-| `deco.password` | `ATLANTIS_DECO_PASSWORD` | required on first start | TP-Link ID password (`ssh`), or the local management password (`luci`). |
+| `deco.email` | `ATLANTIS_DECO_EMAIL` | required with `deco.host` for `ssh` | Your TP-Link ID email. |
+| `deco.password` | `ATLANTIS_DECO_PASSWORD` | needed once with `deco.host` | TP-Link ID password (`ssh`), or the local management password (`luci`). |
 | `deco.host_key` | `ATLANTIS_DECO_HOST_KEY` | | Pin the Deco's SSH host key (`SHA256:...`). If empty, Atlantis trusts the key it sees first. |
 | `deco.tls_pin` | `ATLANTIS_DECO_TLS_PIN` | | Pin the Deco's HTTPS certificate (`luci` only). If empty, Atlantis trusts the certificate it sees first. |
-| `poll.fast` | `ATLANTIS_POLL_FAST` | `30s` | How often clients are read (minimum `10s`). |
-| `poll.slow` | `ATLANTIS_POLL_SLOW` | `5m` | How often Decos, the internet connection, Wi-Fi and firmware are read (minimum `10s`). |
-| `poll.offline_after_misses` | `ATLANTIS_POLL_OFFLINE_AFTER_MISSES` | `2` | Missed fast polls before a device counts as offline. |
+| `poll.fast` | `ATLANTIS_POLL_FAST` | `30s` | How often clients are read (minimum `10s`). Settings → Refresh overrides it. |
+| `poll.slow` | `ATLANTIS_POLL_SLOW` | `5m` | How often Decos, the internet connection, Wi-Fi and firmware are read (minimum `10s`). Settings → Refresh overrides it. |
+| `poll.offline_after_misses` | `ATLANTIS_POLL_OFFLINE_AFTER_MISSES` | `2` | Missed fast polls before a device counts as offline. Settings → Refresh overrides it. |
 | `store.path` | `ATLANTIS_STORE_PATH` | `/data/atlantis.db` | SQLite database file. |
 | `store.raw_retention` | `ATLANTIS_STORE_RAW_RETENTION` | `168h` | How long raw samples are kept before being rolled up hourly. |
 | `store.rollup_retention` | `ATLANTIS_STORE_ROLLUP_RETENTION` | `2160h` | How long hourly history and events are kept. Must be at least `raw_retention`. |
@@ -232,7 +247,7 @@ Durations use Go's format: `30s`, `5m`, `168h`.
 Example `atlantis.yaml`:
 
 ```yaml
-deco:
+deco:                 # optional; or add the Deco in the browser
   host: 192.168.68.1
   email: you@example.com
 poll:
@@ -248,18 +263,33 @@ notify:
   timezone: Asia/Jerusalem
 ```
 
-The Settings page shows the active configuration. To change it, edit the file or environment and restart Atlantis.
+The Settings page shows the active configuration. The Deco connection and the refresh times are changed there; for everything else, edit the file or environment and restart Atlantis.
 
 ## Using Atlantis
 
-- **First run:** create the admin account (the password needs at least 10 characters). Atlantis then signs in to the Deco. The first time, it trusts the Deco's SSH key and remembers it.
+- **First run:** create the admin account (the password needs at least 10 characters). Then enter the main Deco's IP address, your TP-Link ID email and its password, and choose **Connect**. Atlantis signs in and reads the Decos before it saves anything. A wrong password is not retried, so the account isn't locked; after five rejected passwords in 15 minutes, Atlantis waits before it tries again. The first time, Atlantis trusts the Deco's SSH key and remembers it.
+- **Settings → Deco** shows the connected Deco and its security key. **Change connection** updates the address, account or password and keeps the history. **Remove** (type `REMOVE` to confirm) signs out and deletes the Deco's devices, history and events; notification channels and your account stay.
+- **Settings → Refresh** sets how often devices and the mesh are checked, and after how many missed checks a device counts as offline.
 - **The status line** at the top of every page shows the connection to the Deco and its action:
   - **Release for the app:** sign Atlantis out for 10 minutes so you can use the Deco app.
   - **Resume now:** sign back in early, after a release, a pause, or another admin taking the session.
   - **Trust the new key:** shown when the Deco presents a different key than before. That is expected after a firmware update or reset; otherwise, don't trust it.
-- **Settings** has the same session controls, plus **Release for an hour** and **Pause polling**, the notification channels and the active configuration.
+- **Settings** also has the same session controls, plus **Release for an hour** and **Pause polling**, the notification channels and the active configuration.
 - **Watching a device** (on its detail page) can limit notifications to the devices you care about. With `metrics.per_client: watched`, watched devices also get their own metrics.
-- **Not available yet:** restarting Decos and turning individual networks on or off. Both appear in the UI but are disabled until they are verified on real hardware. Use the Deco app for those.
+- **Not available yet:** restarting Decos. The button appears in the UI but is disabled until it is verified on real hardware. Use the Deco app for that.
+
+### Wi-Fi changes
+
+Atlantis only offers a Wi-Fi change after it has been tested on a real Deco: the change was made, read back, and undone again. These are tested on a Deco M5:
+
+| Network | Changes |
+|---|---|
+| Main | Name and password, on every band |
+| Guest | On or off; name, password and security (open or WPA2) |
+| IoT | On or off; name and password |
+| Multi-link | Shown, not changed yet |
+
+Each change keeps the network's other settings as the Deco reports them, is read back to confirm, and disconnects the devices on that network until they join again. The main network cannot be turned off. Everything else answers "not available yet". Developers can test more with `atlantis ssh wifi-probe` (see [Command line](#command-line)).
 
 ## Notifications
 
@@ -324,7 +354,8 @@ The UI uses the REST API under `/api/v1`. The OpenAPI spec is at `/api/openapi.y
 | `GET` | `/api/v1/nodes`, `/api/v1/nodes/{id}?range=24h\|7d\|30d` | Decos, and one Deco with its history |
 | `GET` | `/api/v1/clients?q=&online=&node=&band=&network=` | Devices |
 | `GET` / `PATCH` | `/api/v1/clients/{mac}` | One device with history; set `alias`, `watch`, `tags` |
-| `GET` / `PATCH` | `/api/v1/wifi` | Wi-Fi; `{"network":"host","ssid":"...","password":"..."}` changes the main network (`ssh` transport only) |
+| `GET` / `PATCH` | `/api/v1/wifi` | Wi-Fi, with `editable` listing the changes allowed per network. `PATCH` changes one network, for example `{"network":"guest","enable":false}` or `{"network":"host","ssid":"...","password":"..."}` (`ssh` transport only). |
+| `GET` / `POST` / `PUT` / `DELETE` | `/api/v1/deco` | The Deco connection: show it, add it (checked by signing in first), change it, or remove it with `{"confirm":"REMOVE"}`. The password is never returned. |
 | `GET` | `/api/v1/firmware` | Available firmware updates |
 | `GET` | `/api/v1/events?type=&since=&limit=` | The event log |
 | `GET` | `/api/v1/settings` | The active configuration |
@@ -348,6 +379,7 @@ The UI uses the REST API under `/api/v1`. The OpenAPI spec is at `/api/openapi.y
 | `atlantis version` | Print the version. |
 | `atlantis ssh probe --host IP --email EMAIL` | Sign in over SSH and print what the Deco reports. Read-only. The password comes from `ATLANTIS_CLOUD_PASSWORD`. |
 | `atlantis ssh set-wifi --host IP --ssid NAME` | Change the main Wi-Fi name and password on every band. The new password comes from `ATLANTIS_WIFI_PASSWORD`. |
+| `atlantis ssh wifi-probe --host IP --network guest --field enable` | Test one Wi-Fi change on a Deco and undo it: `--field` is `enable`, `ssid`, `password`, `encryption` or `hidden`. It refuses changes that would cut off devices (turning off an IoT network that is on, or the main network). Writes a sanitised record for the tests. |
 | `atlantis probe --host IP` | Sign in to the local web API (`luci`) and print what it reports. Read-only. |
 | `atlantis cloud probe --email EMAIL` | List your sites through the TP-Link cloud. Read-only. |
 
@@ -357,6 +389,8 @@ Run any command with `--help` for all its flags.
 
 - The Deco password and notification credentials are encrypted at rest with AES-256-GCM, using `ATLANTIS_SECRET_KEY`. They are never returned by the API and never logged.
 - The Deco's SSH host key (or HTTPS certificate with `luci`) is pinned on first use. A different key stops Atlantis until you trust it from the UI.
+- Connecting a Deco signs in once to check the password and never retries a rejected one. After five rejected passwords in 15 minutes, Atlantis waits so the TP-Link ID isn't locked.
+- Wi-Fi changes are limited to the ones tested on a real Deco, and every change and connection change is written to the audit log (without passwords).
 - Atlantis's own account uses a bcrypt password, an HttpOnly SameSite=Strict session cookie, CSRF tokens on changes, and a lockout after repeated failed sign-ins.
 - Expose Atlantis only on your LAN or behind a reverse proxy with HTTPS. Set `server.base_url` to the `https://` address so the cookie is marked `Secure`.
 - The database holds your network's history and the encrypted credentials. Back up `/data` and the secret key together.
@@ -364,7 +398,9 @@ Run any command with `--help` for all its flags.
 ## Troubleshooting
 
 - **"The Deco app or another admin is signed in; retrying shortly".** The Deco app (or a browser) holds the Deco's single admin session. Close the app, or wait: Atlantis backs off and tries again. Use **Release for the app** whenever you need the app.
-- **"The Deco rejected the password".** Atlantis stops trying, to avoid locking the account. Set `ATLANTIS_DECO_PASSWORD` to the right TP-Link ID password and restart.
+- **"The Deco rejected the password".** Atlantis stops trying, to avoid locking the account. Enter the right TP-Link ID password in **Settings → Deco → Change connection** (or on the Reconnect page).
+- **"This Deco only accepts TP-Link's newer encrypted (TLS) connection".** The Deco's model or firmware doesn't accept the SSH connection Atlantis uses. See [Supported Decos](#supported-decos).
+- **"This is a satellite Deco".** Enter the address of the main Deco, the one connected to the modem.
 - **"The Deco's security key changed".** This is expected after a firmware update or factory reset. If neither happened, don't trust the new key: something else may be answering at the Deco's address.
 - **CPU and memory show "—".** Some models, such as the M5, don't report them.
 - **Swagger UI is blank.** `/api/docs` loads Swagger UI from unpkg.com, so the browser needs internet access. The spec itself is at `/api/openapi.yaml`.
@@ -375,7 +411,7 @@ Run any command with `--help` for all its flags.
 make dev       # the UI with hot reload against a pretend Deco mesh (http://localhost:5173)
 make test      # Go tests (with -race) and the UI unit tests
 make lint      # go vet, golangci-lint, TypeScript and ESLint
-make e2e       # Playwright smoke tests against atlantis serve and the pretend mesh
+make e2e       # Playwright smoke tests: start with no Deco, connect the pretend mesh in the UI
 make docker    # build the image for this machine
 ```
 
@@ -385,6 +421,7 @@ make docker    # build the image for this machine
 cmd/atlantis/        the binary: serve, probes, keygen, healthcheck
 cmd/atlantis-fake/   the pretend mesh
 internal/deco/       the Deco client interface; tmp/ and tmpclient/ (SSH), luci/ (web API), cloud/
+internal/site/       the Deco connection: add, change and remove it at runtime
 internal/poller/     the fast and slow loops
 internal/events/     turns poll differences into events
 internal/session/    the Deco session: sign-in, back-off, release, key trust

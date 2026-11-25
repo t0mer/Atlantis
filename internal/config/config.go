@@ -170,17 +170,16 @@ func (c *Config) Validate() error {
 	if _, _, err := net.SplitHostPort(c.Server.Listen); err != nil {
 		bad("server.listen %q: %v", c.Server.Listen, err)
 	}
+	// The Deco can also be added from the UI, so these settings are
+	// optional; when a host is given here, it must be complete.
 	switch c.Deco.Transport {
 	case "ssh":
-		if c.Deco.Email == "" {
-			bad("deco.email (the TP-Link ID) is required for the ssh transport")
+		if c.Deco.Host != "" && c.Deco.Email == "" {
+			bad("deco.email (the TP-Link ID) is required with deco.host for the ssh transport")
 		}
 	case "luci":
 	default:
 		bad("deco.transport must be ssh or luci, not %q", c.Deco.Transport)
-	}
-	if c.Deco.Host == "" {
-		bad("deco.host (the main Deco's IP address) is required")
 	}
 	if c.Deco.Port < 0 || c.Deco.Port > 65535 {
 		bad("deco.port %d is out of range", c.Deco.Port)

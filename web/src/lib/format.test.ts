@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { ago, bandLabel, eventText, goDuration, rate, sessionSentence } from "./format";
+import { ago, bandLabel, eventText, goDuration, rate, sessionSentence, shortError } from "./format";
 
 test("rate", () => {
   expect(rate(0)).toBe("0");
@@ -37,4 +37,11 @@ test("goDuration reads Go durations", () => {
   expect(goDuration("10s")).toBe("10 seconds");
   expect(goDuration("0s")).toBe("0 seconds");
   expect(goDuration("odd")).toBe("odd");
+});
+
+test("a lost connection says why", () => {
+  expect(shortError("sshconn: dial tcp 192.0.2.1:20001: connect: connection refused")).toBe("connection refused");
+  expect(sessionSentence({ state: "disconnected", since: "", logins: 0, error: "tmp: i/o timeout" }).text).toBe(
+    "Lost the connection to the Deco (i/o timeout); retrying",
+  );
 });
