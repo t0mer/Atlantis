@@ -121,15 +121,23 @@ func (c *Client) setNetwork(ctx context.Context, p deco.WirelessPatch) ([]string
 		return nil, fmt.Errorf("setting Wi-Fi: %w", err)
 	}
 
+	// Undoing a change must not depend on the caller still waiting.
+	undo := func() error {
+		_, err := c.request(context.WithoutCancel(ctx), tmp.OpWirelessSet, orig)
+		return err
+	}
 	after, err := c.Request(ctx, tmp.OpWirelessGet, nil)
 	if err != nil {
-		return nil, fmt.Errorf("the change was sent, but reading it back failed: %w", err)
+		if rerr := undo(); rerr != nil {
+			return nil, fmt.Errorf("the change was sent, but reading it back failed (%w), and restoring the previous settings failed: %v", err, rerr)
+		}
+		return nil, fmt.Errorf("the change was sent, but reading it back failed (%w); the previous settings were restored", err)
 	}
 	check, _ := deco.ParseObj(after)
 	for _, band := range bands {
 		if err := confirm(check.Obj(band).Obj(p.Network), p); err != nil {
 			// Half-applied or rejected: put the previous settings back.
-			if _, rerr := c.request(ctx, tmp.OpWirelessSet, orig); rerr != nil {
+			if rerr := undo(); rerr != nil {
 				return nil, fmt.Errorf("the device accepted the change but %s %s, and restoring the previous settings failed: %v", band, err, rerr)
 			}
 			return nil, fmt.Errorf("the device accepted the change but %s %s; the previous settings were restored", band, err)

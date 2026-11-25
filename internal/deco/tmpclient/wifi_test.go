@@ -199,7 +199,7 @@ func TestSetNetworkRefusesUnverifiedWrites(t *testing.T) {
 		{Network: "host", Hidden: ptr(true)},
 		{Network: "host", SSID: ptr("ok"), Encryption: ptr("wpa3")},
 		{Network: "guest", Encryption: ptr("wpa2+wpa"), Password: ptr("guest-pass-1")}, // value not proven
-		{Network: "guest", Bands: []string{"band2_4"}, Enable: ptr(true)},             // single band not proven
+		{Network: "guest", Bands: []string{"band2_4"}, Enable: ptr(true)},              // single band not proven
 	} {
 		if _, err := c.SetNetwork(context.Background(), p); !errors.Is(err, deco.ErrNotVerified) {
 			t.Errorf("%+v: got %v", p.Fields(), err)
@@ -323,6 +323,21 @@ func TestSetNetworkRestoresWhenNotConfirmed(t *testing.T) {
 	}
 	g := sentParams(t, d)["band2_4"]["guest"]
 	if g["enable"] != false {
+		t.Fatalf("the last write must restore the original: %v", g)
+	}
+}
+
+// If the read-back fails, the change is undone rather than left half-known.
+func TestSetNetworkRestoresWhenReadBackFails(t *testing.T) {
+	d := fakedeco.New()
+	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
+	d.FailWirelessGetAfterSet()
+	c := newClient(t, d)
+	_, err := c.SetNetwork(context.Background(), deco.WirelessPatch{Network: "guest", Enable: ptr(true)})
+	if err == nil || !strings.Contains(err.Error(), "previous settings were restored") {
+		t.Fatalf("got %v", err)
+	}
+	if g := sentParams(t, d)["band2_4"]["guest"]; g["enable"] != false {
 		t.Fatalf("the last write must restore the original: %v", g)
 	}
 }

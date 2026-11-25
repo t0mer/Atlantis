@@ -29,7 +29,9 @@ type Device struct {
 	expireOne bool
 	stall     tmp.Opcode
 	relayFail bool
-	ignoreSet int // WIRELESS_SETs to acknowledge without applying
+	ignoreSet int  // WIRELESS_SETs to acknowledge without applying
+	failRead  bool // fail the first WIRELESS_GET after a WIRELESS_SET
+	readArmed bool
 	assocReqs int
 }
 
@@ -85,6 +87,10 @@ func (d *Device) SetResult(op tmp.Opcode, result any) {
 // IgnoreWirelessSets makes the next n WIRELESS_SETs succeed without
 // changing anything (a device that does not apply a change).
 func (d *Device) IgnoreWirelessSets(n int) { d.mu.Lock(); d.ignoreSet = n; d.mu.Unlock() }
+
+// FailWirelessGetAfterSet makes the first WIRELESS_GET after the next
+// WIRELESS_SET fail, as if the read-back were lost.
+func (d *Device) FailWirelessGetAfterSet() { d.mu.Lock(); d.failRead = true; d.mu.Unlock() }
 
 // ByeAfter makes the device send a bye (client limit) after replying to op.
 func (d *Device) ByeAfter(op tmp.Opcode) { d.mu.Lock(); d.byeAfter = op; d.mu.Unlock() }
@@ -211,12 +217,20 @@ func (d *Device) execute(st *stream, op tmp.Opcode, body []byte) ([]byte, byte) 
 	d.requests[op] = append(json.RawMessage(nil), body...)
 	if op == tmp.OpWirelessSet {
 		code := 0
+		if d.failRead {
+			d.failRead, d.readArmed = false, true
+		}
 		if d.ignoreSet > 0 {
 			d.ignoreSet--
 		} else if !d.applyWirelessSet(body) {
 			code = -1
 		}
 		b, _ := json.Marshal(map[string]any{"error_code": code, "result": map[string]any{}})
+		return b, 0
+	}
+	if op == tmp.OpWirelessGet && d.readArmed {
+		d.readArmed = false
+		b, _ := json.Marshal(map[string]any{"error_code": -1, "msg": "read failed"})
 		return b, 0
 	}
 	res, ok := d.results[op]

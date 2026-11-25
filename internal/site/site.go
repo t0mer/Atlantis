@@ -93,7 +93,7 @@ type Site struct {
 	changing atomic.Bool // a stored Deco's connection is being changed
 
 	pollMu sync.Mutex // serialises SetPoll
-	poll Poll
+	poll   Poll
 }
 
 // New returns a site with nothing running. ctx bounds every run.
@@ -295,6 +295,7 @@ func (s *Site) restartStored(ctx context.Context) {
 	}
 	if err != nil {
 		s.d.Log.Error("restarting the previous Deco connection", "err", err)
+		s.d.Hub.Publish(poller.Message{Kind: "deco", Data: nil}) // nothing runs now: let the UI offer to fix it
 	}
 }
 
@@ -381,7 +382,11 @@ func (s *Site) AcceptHostKey(ctx context.Context) error {
 			return err
 		}
 		s.stop(ctx)
-		return s.start(ctx, n, password, newHostKeys(s.d.Store, n))
+		if err := s.start(ctx, n, password, newHostKeys(s.d.Store, n)); err != nil {
+			s.d.Hub.Publish(poller.Message{Kind: "deco", Data: nil}) // nothing runs now
+			return err
+		}
+		return nil
 	}
 	r.keys.accept()
 	if err := s.d.Store.SetHostKey(ctx, n.ID, ""); err != nil {

@@ -43,7 +43,7 @@ func (f *fakeClient) Devices(context.Context) ([]deco.Device, error) {
 	return []deco.Device{{ID: "m", Master: true, Online: true}}, nil
 }
 func (f *fakeClient) Clients(context.Context, string) ([]deco.WifiClient, error) { return nil, nil }
-func (f *fakeClient) WAN(context.Context) (*deco.WANStatus, error)              { return nil, deco.ErrUnsupported }
+func (f *fakeClient) WAN(context.Context) (*deco.WANStatus, error)               { return nil, deco.ErrUnsupported }
 func (f *fakeClient) Performance(context.Context) (*deco.Performance, error) {
 	return nil, deco.ErrUnsupported
 }
@@ -60,15 +60,15 @@ type noNotify struct{}
 func (noNotify) Notify(store.Event, string, bool) {}
 
 type harness struct {
-	s      *Site
-	st     *store.Store
-	box    *secret.Box
-	client *fakeClient
-	disc   *Discovery
+	s        *Site
+	st       *store.Store
+	box      *secret.Box
+	client   *fakeClient
+	disc     *Discovery
 	build    error
 	failHost string // Build fails with ErrTLSOnly for this host
 	builds   int
-	mu     sync.Mutex
+	mu       sync.Mutex
 }
 
 func newHarness(t *testing.T) *harness {
