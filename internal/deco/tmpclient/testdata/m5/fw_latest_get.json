@@ -1,0 +1,24 @@
+{
+  "fw_list": [
+    {
+      "check_status": true,
+      "device_id_list": [
+        "[redacted]"
+      ],
+      "device_model": "M5",
+      "download_url": "https://ota-download.tplinkcloud.com/firmware/M5v1_M5v3_M5v3.20_M1300v1_M1300v2_M1300v3-SP4-RSA2048-up-ver1-9-5-P1%5B20260602-rel25369%5D_2026-06-02_00.03.30_0000000000001.bin",
+      "file_size": 17107872,
+      "hw_id": "[redacted]",
+      "name": "bmFtZS01",
+      "need_force_upgrade": false,
+      "need_to_download": true,
+      "need_to_upgrade": true,
+      "oem_id": "[redacted]",
+      "oversized_firmware": false,
+      "release_date": "2026-07-20",
+      "release_note": "bmFtZS02",
+      "type": 1,
+      "version": "bmFtZS03"
+    }
+  ]
+}

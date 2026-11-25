@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -268,5 +269,48 @@ func TestOddValuesKeepEntries(t *testing.T) {
 	w, _ := parseWireless(json.RawMessage(`{"band_steering":{"host":{"ssid":"eA=="}},"band2_4":{"host":{"ssid":"eA=="},"radio":"x"}}`))
 	if _, ok := w.Bands["band_steering"]; ok || w.Bands["band2_4"].Networks["host"].SSID != "x" {
 		t.Fatalf("%+v", w)
+	}
+}
+
+// Recorded from a Deco M5 (master, firmware 1.9.x) over SSH and sanitised:
+// names, MACs and IPs are placeholders. These are real replies, unlike the
+// synthetic fixtures above.
+func TestRecordedM5Fixtures(t *testing.T) {
+	read := func(name string) json.RawMessage {
+		b, err := os.ReadFile("testdata/m5/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	ds, err := parseDevices(read("device_list_get.json"))
+	if err != nil || len(ds) == 0 {
+		t.Fatalf("devices: %v %v", ds, err)
+	}
+	m := ds[0]
+	if !m.Master || !m.Online || !m.InternetOnline || m.Model == "" || m.MAC == "" || m.Nickname == "" {
+		t.Fatalf("M5 master: %+v", m)
+	}
+	w, err := parseWireless(read("wireless_get.json"))
+	if err != nil || len(w.Bands) != 2 {
+		t.Fatalf("wireless: %+v %v", w, err)
+	}
+	for _, band := range []string{"band2_4", "band5_1"} {
+		b := w.Bands[band]
+		for _, net := range []string{"host", "guest", "iot"} {
+			if _, ok := b.Networks[net]; !ok {
+				t.Errorf("%s/%s missing", band, net)
+			}
+		}
+		if !b.Networks["host"].Enable || b.Networks["host"].SSID == "" {
+			t.Errorf("%s host: %+v", band, b.Networks["host"])
+		}
+	}
+	fw, err := parseFirmware(read("fw_latest_get.json"))
+	if err != nil || len(fw) == 0 || fw[0].Model == "" || fw[0].LatestVersion == "" {
+		t.Fatalf("firmware: %+v %v", fw, err)
+	}
+	if _, err := parseClients(read("client_list_get.json"), read("client_list_speed_get.json"), m.ID); err != nil {
+		t.Fatal(err)
 	}
 }
