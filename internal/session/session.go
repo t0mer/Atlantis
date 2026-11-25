@@ -86,6 +86,10 @@ func New(c deco.Client, onChange func(Status)) *Manager {
 // SetClock replaces the time source (tests).
 func (m *Manager) SetClock(now func() time.Time) { m.now = now }
 
+// Client is the device client the manager guards. Use Do for device
+// calls; this is for static capabilities (such as deco.WiFiWriter.Editable).
+func (m *Manager) Client() deco.Client { return m.client }
+
 // Status returns the current status.
 func (m *Manager) Status() Status {
 	m.mu.Lock()

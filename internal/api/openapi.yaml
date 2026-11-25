@@ -18,9 +18,9 @@ info:
     Until then, every endpoint that reads the mesh answers `409` with
     `{"code": "no_deco"}`.
 
-    **Writes.** Only actions verified on a real Deco are performed: changing the
-    main Wi-Fi SSID and password. Reboot and Wi-Fi on/off answer `501` until
-    they are verified. Secrets (passwords, channel URLs and tokens) are
+    **Writes.** Only actions verified on a real Deco are performed; `GET /api/v1/wifi`
+    lists the Wi-Fi fields that may change. Reboot and unverified Wi-Fi changes
+    answer `501` until they are verified. Secrets (passwords, channel URLs and tokens) are
     write-only and never returned.
 servers:
   - url: /
@@ -261,23 +261,43 @@ paths:
       responses: { "200": { description: Updated }, "404": { description: Unknown client } }
   /api/v1/wifi:
     get:
-      summary: Wi-Fi bands and networks (no passwords)
-      responses: { "200": { description: OK } }
+      summary: Wi-Fi bands and networks (no passwords), plus which fields Atlantis may change per network
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bands: { type: object, description: "Per band (band2_4, band5_1, band6, ...): radio and networks (host, guest, iot, mlo)" }
+                  editable:
+                    type: object
+                    description: Network key to the fields verified on a real Deco (enable, ssid, password, encryption, hidden)
+                    additionalProperties: { type: array, items: { type: string } }
     patch:
-      summary: Change the main network's SSID and password on every band
-      description: Every device on the main network disconnects until it reconnects with the new details. Toggling networks (band/enable) answers 501 until verified.
+      summary: Change one Wi-Fi network (main, guest or IoT) on some or all bands
+      description: |
+        Only the given fields change; everything else stays as the Deco reports it. Devices on
+        that network disconnect until they reconnect. A field not listed in `editable` for the
+        network answers 501 until it has been verified on a Deco. The main network cannot be
+        turned off.
       security: [ { session: [], csrf: [] } ]
       requestBody:
         content:
           application/json:
             schema:
               type: object
-              required: [network, ssid, password]
+              required: [network]
               properties:
-                network: { type: string, enum: [host] }
+                network: { type: string, enum: [host, guest, iot] }
+                bands: { type: array, items: { type: string }, description: Empty for every band that has the network }
+                enable: { type: boolean, description: Turn a guest or IoT network on or off }
                 ssid: { type: string, maxLength: 32 }
                 password: { type: string, minLength: 8, maxLength: 63, writeOnly: true }
-      responses: { "200": { description: Changed and confirmed }, "400": { description: Invalid }, "501": { description: Not available }, "502": { description: Device refused } }
+                encryption: { type: string, enum: [none, psk, wpa2, wpa2+wpa, wpa3, wpa2+wpa3] }
+                hidden: { type: boolean }
+      responses: { "200": { description: Changed and confirmed }, "400": { description: Invalid }, "501": { description: Not verified on a Deco yet }, "502": { description: Device refused } }
   /api/v1/firmware:
     get:
       summary: Firmware update state per model

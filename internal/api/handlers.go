@@ -302,57 +302,67 @@ func (s *Server) patchClient(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"mac": c.MAC, "alias": c.Alias, "watch": c.Watch, "tags": c.Tags})
 }
 
+// wifiView is the Wi-Fi settings plus which fields Atlantis may change per
+// network (only writes verified on a real Deco).
+type wifiView struct {
+	*deco.WirelessConfig
+	Editable map[string][]string `json:"editable"`
+}
+
 func (s *Server) wifi(w http.ResponseWriter, r *http.Request) {
-	snap := runOf(r.Context()).Poller.Snapshot()
+	run := runOf(r.Context())
+	snap := run.Poller.Snapshot()
 	if snap.Wireless == nil {
 		writeError(w, http.StatusServiceUnavailable, "no Wi-Fi data yet")
 		return
 	}
-	writeJSON(w, http.StatusOK, snap.Wireless)
+	v := wifiView{WirelessConfig: snap.Wireless, Editable: map[string][]string{}}
+	if ww, ok := run.Session.Client().(deco.WiFiWriter); ok {
+		v.Editable = ww.Editable()
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
-// patchWiFi changes the main network's SSID and password, the only Wi-Fi
-// write verified on hardware. Toggling networks is not available yet.
+// patchWiFi changes one Wi-Fi network. Fields not yet verified on a Deco
+// answer 501.
 func (s *Server) patchWiFi(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Network  string `json:"network"`
-		Band     string `json:"band"`
-		Enable   *bool  `json:"enable"`
-		SSID     string `json:"ssid"`
-		Password string `json:"password"`
-	}
-	if !readJSON(w, r, &body) {
+	var p deco.WirelessPatch
+	if !readJSON(w, r, &p) {
 		return
 	}
-	if body.Enable != nil || body.Band != "" || (body.Network != "" && body.Network != "host") {
-		notVerified(w, r) // only the main network's SSID/password is verified
-		return
-	}
-	if body.Network != "host" || body.SSID == "" || body.Password == "" {
-		writeError(w, http.StatusBadRequest, `send {"network":"host","ssid":"...","password":"..."}`)
-		return
-	}
+	run := runOf(r.Context())
 	var bands []string
-	err := runOf(r.Context()).Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {
+	err := run.Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {
 		ww, ok := c.(deco.WiFiWriter)
 		if !ok {
 			return deco.ErrUnsupported
 		}
 		var err error
-		bands, err = ww.SetHostWiFi(ctx, body.SSID, body.Password)
+		bands, err = ww.SetNetwork(ctx, p)
 		return err
 	})
-	s.audit(r.Context(), userFrom(r.Context()), "wifi.set_host", "ssid="+body.SSID, err)
-	if err != nil {
-		if errors.Is(err, deco.ErrUnsupported) {
-			s.fail(w, err)
-			return
-		}
+	target := "network=" + p.Network + " fields=" + strings.Join(p.Fields(), ",")
+	if p.SSID != nil {
+		target += " ssid=" + *p.SSID
+	}
+	s.audit(r.Context(), userFrom(r.Context()), "wifi.set", target, err)
+	switch {
+	case err == nil:
+	case errors.Is(err, deco.ErrNotVerified):
+		writeError(w, http.StatusNotImplemented, "not available yet: "+err.Error())
+		return
+	case errors.Is(err, deco.ErrInvalid):
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	case errors.Is(err, deco.ErrUnsupported):
+		s.fail(w, err)
+		return
+	default:
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	runOf(r.Context()).Poller.Refresh()
-	writeJSON(w, http.StatusOK, map[string]any{"ssid": body.SSID, "bands": bands})
+	run.Poller.Refresh()
+	writeJSON(w, http.StatusOK, map[string]any{"network": p.Network, "bands": bands})
 }
 
 func (s *Server) firmware(w http.ResponseWriter, r *http.Request) {
