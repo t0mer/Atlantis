@@ -55,3 +55,20 @@ func TestFlexTypes(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+// Review finding: one odd value must not make the containing struct fail.
+func TestFlexTypesNeverFail(t *testing.T) {
+	var v struct {
+		I       FlexInt
+		F       FlexFloat
+		B       FlexBool
+		S, N, O FlexString
+	}
+	err := json.Unmarshal([]byte(`{"I":"n/a","F":"0.35","B":"unknown","S":"connected","N":1,"O":{"x":1}}`), &v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.I != 0 || v.F != 0.35 || v.B || v.S != "connected" || v.N != "1" || v.O != "" {
+		t.Fatalf("%+v", v)
+	}
+}

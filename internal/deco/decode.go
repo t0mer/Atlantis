@@ -69,55 +69,85 @@ func NormalizeMAC(s string) string {
 // WireMAC converts aa:bb:cc:dd:ee:ff to the device's AA-BB-CC-DD-EE-FF.
 func WireMAC(s string) string { return strings.ToUpper(strings.ReplaceAll(NormalizeMAC(s), ":", "-")) }
 
-// FlexInt decodes a JSON number, a numeric string, or null/"" (as 0).
+// FlexInt decodes a JSON number or a numeric string. It never fails:
+// null, "", and values that are not numbers decode as 0, so one odd field
+// cannot drop a whole node or client.
 type FlexInt int64
 
 func (f *FlexInt) UnmarshalJSON(b []byte) error {
+	*f = 0
 	b = bytes.TrimSpace(b)
-	if len(b) == 0 || string(b) == "null" {
-		*f = 0
+	if len(b) == 0 {
 		return nil
 	}
 	if b[0] == '"' {
 		var s string
-		if err := json.Unmarshal(b, &s); err != nil {
-			return err
-		}
-		if s = strings.TrimSpace(s); s == "" {
-			*f = 0
+		if json.Unmarshal(b, &s) != nil {
 			return nil
 		}
-		v, err := strconv.ParseFloat(s, 64)
-		if err != nil {
-			return err
-		}
+		b = []byte(strings.TrimSpace(s))
+	}
+	if v, err := strconv.ParseFloat(string(b), 64); err == nil {
 		*f = FlexInt(v)
-		return nil
 	}
-	var v float64
-	if err := json.Unmarshal(b, &v); err != nil {
-		return err
-	}
-	*f = FlexInt(v)
 	return nil
 }
 
-// FlexBool decodes true/false, 0/1, or "true"/"false"/"0"/"1"/"on"/"off".
+// FlexFloat is FlexInt for fractional values (e.g. a 0.35 CPU load).
+type FlexFloat float64
+
+func (f *FlexFloat) UnmarshalJSON(b []byte) error {
+	*f = 0
+	b = bytes.TrimSpace(b)
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if json.Unmarshal(b, &s) != nil {
+			return nil
+		}
+		b = []byte(strings.TrimSpace(s))
+	}
+	if v, err := strconv.ParseFloat(string(b), 64); err == nil {
+		*f = FlexFloat(v)
+	}
+	return nil
+}
+
+// FlexBool decodes true/false, numbers (non-zero is true) and the strings
+// "true"/"1"/"on"/"yes". It never fails; anything else is false.
 type FlexBool bool
 
 func (f *FlexBool) UnmarshalJSON(b []byte) error {
-	s := strings.ToLower(strings.Trim(string(bytes.TrimSpace(b)), `"`))
+	s := strings.ToLower(strings.TrimSpace(strings.Trim(string(bytes.TrimSpace(b)), `"`)))
 	switch s {
-	case "true", "1", "on", "yes":
+	case "true", "on", "yes":
 		*f = true
-	case "false", "0", "off", "no", "", "null":
-		*f = false
 	default:
-		var n float64
-		if err := json.Unmarshal([]byte(s), &n); err != nil {
-			return err
+		n, err := strconv.ParseFloat(s, 64)
+		*f = FlexBool(err == nil && n != 0)
+	}
+	return nil
+}
+
+// FlexString decodes a string, or a number or boolean as its text, so a
+// status that one firmware sends as "connected" and another as 1 is kept.
+// It never fails; objects and arrays decode as "".
+type FlexString string
+
+func (f *FlexString) UnmarshalJSON(b []byte) error {
+	*f = ""
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	switch b[0] {
+	case '"':
+		var s string
+		if json.Unmarshal(b, &s) == nil {
+			*f = FlexString(s)
 		}
-		*f = n != 0
+	case '{', '[':
+	default:
+		*f = FlexString(b)
 	}
 	return nil
 }
