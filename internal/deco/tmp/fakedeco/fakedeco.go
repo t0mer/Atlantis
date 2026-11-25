@@ -32,7 +32,11 @@ type Device struct {
 	tokenOK   bool
 	stall     tmp.Opcode
 	relayFail bool
+	assocReqs int
 }
+
+// Associations counts version-association requests received.
+func (d *Device) Associations() int { d.mu.Lock(); defer d.mu.Unlock(); return d.assocReqs }
 
 // FailRelayOnce makes the next relay TRANSFER fail with "device not
 // connected", which ends the client's relay connection.
@@ -116,6 +120,10 @@ func (d *Device) handle(f tmp.Frame, out *bytes.Buffer) {
 	switch f.Ctrl {
 	case tmp.CtrlHeartbeat:
 		d.frame(out, tmp.Frame{Ctrl: tmp.CtrlHeartbeat})
+		return
+	case tmp.CtrlAssocRequest:
+		d.assocReqs++
+		d.frame(out, tmp.Frame{Ctrl: tmp.CtrlAssocAccept})
 		return
 	case tmp.CtrlData:
 	default:

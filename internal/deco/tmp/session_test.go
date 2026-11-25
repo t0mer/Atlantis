@@ -186,3 +186,22 @@ func TestAssocRefuseIsFatal(t *testing.T) {
 		t.Fatalf("want refusal, got %v", err)
 	}
 }
+
+func TestAssociateOption(t *testing.T) {
+	for _, assoc := range []bool{false, true} {
+		client, server := net.Pipe()
+		d := fakedeco.New()
+		go d.Serve(server)
+		s, _, err := tmp.Open(context.Background(), client, tmp.Options{Associate: assoc})
+		if err != nil {
+			t.Fatalf("associate=%v: %v", assoc, err)
+		}
+		if _, err := s.Request(context.Background(), tmp.OpDeviceListGet, nil); err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		if want := map[bool]int{false: 0, true: 1}[assoc]; d.Associations() != want {
+			t.Errorf("associate=%v: %d association requests", assoc, d.Associations())
+		}
+	}
+}
