@@ -218,6 +218,10 @@ func TestClientMetaAndAudit(t *testing.T) {
 	if code, _, _ := e.do(t, "PATCH", "/api/v1/clients/aa:bb:cc:dd:ee:01", `{"nickname":"x"}`, true); code != 400 {
 		t.Fatal("unknown field accepted")
 	}
+	// Browsers' encodeURIComponent escapes the colons; the route must still match.
+	if code, _, raw := e.do(t, "GET", "/api/v1/clients/aa%3Abb%3Acc%3Add%3Aee%3A01", "", false); code != 200 || !strings.Contains(raw, "Kid's phone") {
+		t.Fatalf("escaped MAC: %d %s", code, raw)
+	}
 	_, _, audit := e.do(t, "GET", "/api/v1/audit", "", false)
 	if !strings.Contains(audit, "client.update") {
 		t.Fatalf("audit: %s", audit)
