@@ -30,6 +30,7 @@ func TestSessionOverSSH(t *testing.T) {
 	f := newFake(t, user, "s3cret")
 	var pinned string
 	o := opts(f, user, "s3cret")
+	o.AcceptNew = true
 	o.OnHostKey = func(fp string) { pinned = fp }
 	conn, err := Dial(context.Background(), o)
 	if err != nil {
@@ -55,7 +56,7 @@ func TestSessionOverSSH(t *testing.T) {
 	}
 
 	// The pinned key is accepted on the next connection.
-	o.HostKeyPin, o.OnHostKey = pinned, nil
+	o.HostKeyPin, o.OnHostKey, o.AcceptNew = pinned, nil, false
 	conn, err = Dial(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +66,9 @@ func TestSessionOverSSH(t *testing.T) {
 
 func TestWrongPasswordIsOneAttemptAndNotLeaked(t *testing.T) {
 	f := newFake(t, "u", "right")
-	_, err := Dial(context.Background(), opts(f, "u", "wrong-pass-123"))
+	o := opts(f, "u", "wrong-pass-123")
+	o.AcceptNew = true
+	_, err := Dial(context.Background(), o)
 	if !errors.Is(err, ErrAuthFailed) {
 		t.Fatalf("want ErrAuthFailed, got %v", err)
 	}
@@ -99,5 +102,21 @@ func TestUsername(t *testing.T) {
 	}
 	if Username("Owner@Example.com", true, true) == Username("Owner@Example.com", true, false) {
 		t.Fatal("raw must hash the email as given")
+	}
+}
+
+func TestUnknownHostKeyFailsClosed(t *testing.T) {
+	f := newFake(t, "u", "p")
+	var seen string
+	o := opts(f, "u", "p")
+	o.OnHostKey = func(fp string) { seen = fp }
+	if _, err := Dial(context.Background(), o); !errors.Is(err, ErrUnknownHostKey) {
+		t.Fatalf("want ErrUnknownHostKey, got %v", err)
+	}
+	if f.Attempts() != 0 {
+		t.Fatal("password sent to an unverified host")
+	}
+	if seen == "" {
+		t.Fatal("fingerprint not reported")
 	}
 }

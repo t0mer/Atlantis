@@ -34,6 +34,9 @@ var (
 	ErrAuthFailed = errors.New("sshconn: the Deco rejected the TP-Link ID credentials")
 	// ErrHostKeyChanged means the host key differs from the pinned one.
 	ErrHostKeyChanged = errors.New("sshconn: SSH host key changed")
+	// ErrUnknownHostKey means no key is pinned and AcceptNew is false. The
+	// password is not sent.
+	ErrUnknownHostKey = errors.New("sshconn: unknown SSH host key")
 )
 
 // Options configure Dial.
@@ -42,9 +45,12 @@ type Options struct {
 	Port     int // the TDP-reported port; see tdp.Info.SSHPort
 	User     string
 	Password string
-	// HostKeyPin is the expected "SHA256:..." fingerprint. Empty means trust
-	// on first use: OnHostKey is told the fingerprint to pin.
+	// HostKeyPin is the expected "SHA256:..." fingerprint. When empty the
+	// connection fails closed with ErrUnknownHostKey before any password is
+	// sent, unless AcceptNew is set. OnHostKey is told the fingerprint seen
+	// whenever no pin was given, so the caller can show or store it.
 	HostKeyPin string
+	AcceptNew  bool
 	OnHostKey  func(fingerprint string)
 	// TPSBanner sends the app's TPS banner (TDP banner_type 1).
 	TPSBanner bool
@@ -131,6 +137,9 @@ func Dial(ctx context.Context, o Options) (*Conn, error) {
 			if o.OnHostKey != nil {
 				o.OnHostKey(seen)
 			}
+			if !o.AcceptNew {
+				return ErrUnknownHostKey
+			}
 			return nil
 		}
 		if seen != o.HostKeyPin {
@@ -185,6 +194,8 @@ func classify(err error, password string) error {
 	switch {
 	case errors.Is(err, ErrHostKeyChanged):
 		return ErrHostKeyChanged
+	case errors.Is(err, ErrUnknownHostKey):
+		return ErrUnknownHostKey
 	case strings.Contains(msg, "unable to authenticate"):
 		return fmt.Errorf("%w (%s)", ErrAuthFailed, msg)
 	case strings.Contains(msg, "insecure") && strings.Contains(msg, "rsa"):

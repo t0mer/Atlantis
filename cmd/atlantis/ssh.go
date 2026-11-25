@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -18,10 +20,10 @@ import (
 )
 
 type sshProbeOptions struct {
-	host, email, hostKey, username, dumpDir string
-	port                                    int
-	rawUsername, noAssociate, shared        bool
-	dump, debug, skipTDP                    bool
+	host, email, hostKey, username, dumpDir, knownHosts string
+	port                                                int
+	rawUsername, noAssociate, shared                    bool
+	dump, debug, skipTDP, acceptNew                     bool
 
 	password    string
 	in          io.Reader
@@ -45,8 +47,10 @@ channel, prints the read-only state as JSON (secrets redacted) and
 disconnects. It never sends a write.
 
 The password is read from ATLANTIS_CLOUD_PASSWORD or prompted for without
-echo. On first contact the SSH host key fingerprint is printed; pass it back
-with --host-key to pin it.`,
+echo. The password is only sent to a Deco whose SSH host key is known: on
+first contact the probe prints the key's fingerprint and stops. Check it,
+then re-run with --accept-new-host-key (or --host-key SHA256:...) to trust
+it; trusted keys are kept in ssh_known_hosts in the user config dir.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if o.email == "" {
 				o.email = os.Getenv("ATLANTIS_CLOUD_EMAIL")
@@ -64,6 +68,8 @@ with --host-key to pin it.`,
 	f.StringVar(&o.email, "email", "", "TP-Link ID email (or ATLANTIS_CLOUD_EMAIL)")
 	f.IntVar(&o.port, "port", 0, "SSH port (default: from TDP, else 20001)")
 	f.StringVar(&o.hostKey, "host-key", "", "expected SSH host key fingerprint (SHA256:...)")
+	f.BoolVar(&o.acceptNew, "accept-new-host-key", false, "trust and remember the host key on first contact")
+	f.StringVar(&o.knownHosts, "known-hosts", "", "trusted host keys file (default: ssh_known_hosts in the user config dir)")
 	f.StringVar(&o.username, "username", "", "SSH username override (default: derived from the email)")
 	f.BoolVar(&o.rawUsername, "raw-username", false, "do not lowercase the email before use")
 	f.BoolVar(&o.skipTDP, "no-tdp", false, "skip TDP discovery")
@@ -107,8 +113,26 @@ func runSSHProbe(ctx context.Context, o sshProbeOptions) error {
 	}
 	logf("SSH %s:%d, username %s, TPS banner %v", o.host, port, map[bool]string{true: "sha1(email)", false: "email"}[digest && o.username == ""], tps)
 
+	hostID := fmt.Sprintf("%s:%d", o.host, port)
+	khPath, err := knownHostsPath(o.knownHosts)
+	if err != nil {
+		return err
+	}
+	pin := o.hostKey
+	if pin == "" {
+		pin = lookupHostKey(khPath, hostID)
+	}
+	if pin == "" && !o.acceptNew {
+		// Learn the key without sending the password.
+		_, err := sshconn.Dial(ctx, sshconn.Options{Host: o.host, Port: port, User: user, TPSBanner: tps,
+			OnHostKey: func(fp string) { fmt.Fprintf(o.errOut, "SSH host key of %s: %s\n", hostID, fp) }})
+		if errors.Is(err, sshconn.ErrUnknownHostKey) {
+			return errors.New("unknown SSH host key: check the fingerprint above, then re-run with --accept-new-host-key")
+		}
+		return fmt.Errorf("reading the SSH host key of %s: %w", hostID, err)
+	}
+
 	if o.password == "" {
-		var err error
 		if o.password, err = readSecret(o.in, bufio.NewReader(o.in), o.errOut, "TP-Link ID password: "); err != nil {
 			return err
 		}
@@ -117,9 +141,13 @@ func runSSHProbe(ctx context.Context, o sshProbeOptions) error {
 	dial := func(ctx context.Context, _ func(string, ...any)) (io.ReadWriteCloser, error) {
 		return sshconn.Dial(ctx, sshconn.Options{
 			Host: o.host, Port: port, User: user, Password: o.password,
-			HostKeyPin: o.hostKey, TPSBanner: tps,
+			HostKeyPin: pin, AcceptNew: pin == "" && o.acceptNew, TPSBanner: tps,
 			OnHostKey: func(fp string) {
-				fmt.Fprintf(o.errOut, "SSH host key (pin with --host-key): %s\n", fp)
+				fmt.Fprintf(o.errOut, "trusting new SSH host key of %s: %s\n", hostID, fp)
+				if err := saveHostKey(khPath, hostID, fp); err != nil {
+					fmt.Fprintf(o.errOut, "could not save the host key: %v\n", err)
+				}
+				pin = fp // a reconnect in this run must see the same key
 			},
 		})
 	}
@@ -138,4 +166,44 @@ func runSSHProbe(ctx context.Context, o sshProbeOptions) error {
 		}
 	}()
 	return readSession(ctx, c, sessionOutput{out: o.out, errOut: o.errOut, dump: o.dump, dumpDir: o.dumpDir})
+}
+
+// knownHostsPath returns the trusted host keys file.
+func knownHostsPath(p string) (string, error) {
+	if p != "" {
+		return p, nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("finding the config dir (use --known-hosts): %w", err)
+	}
+	return filepath.Join(dir, "atlantis", "ssh_known_hosts"), nil
+}
+
+// lookupHostKey returns the stored fingerprint for host:port, or "".
+func lookupHostKey(path, hostID string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(line); len(f) == 2 && f[0] == hostID {
+			return f[1]
+		}
+	}
+	return ""
+}
+
+// saveHostKey appends host:port and its fingerprint (mode 0600).
+func saveHostKey(path, hostID, fp string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "%s %s\n", hostID, fp)
+	return err
 }
