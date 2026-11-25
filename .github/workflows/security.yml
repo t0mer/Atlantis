@@ -1,0 +1,74 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 4 * * 1' # weekly, for advisories published after the last change
+
+permissions:
+  contents: read
+
+env:
+  # Trivy runs from its image at a pinned version, not trivy-action, whose tags
+  # were hijacked in 2026.
+  TRIVY_IMAGE: aquasec/trivy:0.67.2
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan the source (dependencies, secrets, Dockerfile)
+        run: |
+          docker run --rm -v "$PWD:/src:ro" "$TRIVY_IMAGE" fs \
+            --scanners vuln,secret,misconfig --severity HIGH,CRITICAL \
+            --exit-code 1 --no-progress /src
+      - name: Build the image
+        run: docker build -t atlantis:scan .
+      - name: Scan the image
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+            --severity HIGH,CRITICAL --exit-code 1 --no-progress atlantis:scan
+
+  snyk:
+    runs-on: ubuntu-latest
+    env:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.SNYK_TOKEN != ''
+      - uses: actions/setup-go@v5
+        if: env.SNYK_TOKEN != ''
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        if: env.SNYK_TOKEN != ''
+        with:
+          node-version: '24'
+      - name: Snyk (Go and npm dependencies)
+        if: env.SNYK_TOKEN != ''
+        run: |
+          (cd web && npm ci)
+          npx --yes snyk@1 test --all-projects --severity-threshold=high
+      - name: Skipped
+        if: env.SNYK_TOKEN == ''
+        run: echo "SNYK_TOKEN is not set; skipping Snyk."
+
+  sonarqube:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.SONAR_TOKEN != ''
+        with:
+          fetch-depth: 0
+      - uses: SonarSource/sonarqube-scan-action@v5
+        if: env.SONAR_TOKEN != ''
+      - name: Skipped
+        if: env.SONAR_TOKEN == ''
+        run: echo "SONAR_TOKEN is not set; skipping SonarQube."
