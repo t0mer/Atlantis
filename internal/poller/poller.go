@@ -46,8 +46,8 @@ type Snapshot struct {
 	// offer them (for example in access-point mode).
 	WANSupported         bool      `json:"wan_supported"`
 	PerformanceSupported bool      `json:"performance_supported"`
-	FastAt               time.Time `json:"fast_at,omitempty"`
-	SlowAt               time.Time `json:"slow_at,omitempty"`
+	FastAt               time.Time `json:"fast_at,omitzero"`
+	SlowAt               time.Time `json:"slow_at,omitzero"`
 }
 
 // Poller runs the loops.
