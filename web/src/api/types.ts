@@ -112,6 +112,18 @@ export interface Band {
 
 export interface Wireless {
   bands: Record<string, Band>;
+  /** Network key → fields Atlantis may change (verified on a real Deco). */
+  editable: Record<string, string[]>;
+}
+
+export interface WirelessPatch {
+  network: string;
+  bands?: string[];
+  enable?: boolean;
+  ssid?: string;
+  password?: string;
+  encryption?: string;
+  hidden?: boolean;
 }
 
 export interface Firmware {
@@ -143,7 +155,7 @@ export interface NetworkSummary {
   performance: { cpu_usage: number; mem_usage: number } | null;
   performance_supported: boolean;
   nodes: { online: number; total: number };
-  clients: Record<"total" | "wired" | "guest" | "band2_4" | "band5" | "band6", number>;
+  clients: Record<"total" | "wired" | "guest" | "band2_4" | "band5" | "band6" | "band60", number>;
   updated: { fast?: string; slow?: string };
 }
 

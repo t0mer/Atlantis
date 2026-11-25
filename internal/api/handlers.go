@@ -39,7 +39,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 
 // clientCounts counts online clients by connection.
 func clientCounts(cs []deco.WifiClient) map[string]int {
-	out := map[string]int{"total": 0, "wired": 0, "guest": 0, "band2_4": 0, "band5": 0, "band6": 0}
+	out := map[string]int{"total": 0, "wired": 0, "guest": 0, "band2_4": 0, "band5": 0, "band6": 0, "band60": 0}
 	for _, c := range cs {
 		if !c.Online {
 			continue
@@ -52,6 +52,8 @@ func clientCounts(cs []deco.WifiClient) map[string]int {
 			out["band2_4"]++
 		case strings.HasPrefix(c.Band, "band5"):
 			out["band5"]++
+		case c.Band == "band60":
+			out["band60"]++
 		case strings.HasPrefix(c.Band, "band6"):
 			out["band6"]++
 		}
