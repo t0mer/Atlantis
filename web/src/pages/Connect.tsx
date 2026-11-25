@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useDecoMutations } from "../api/hooks";
 import type { DecoStatus } from "../api/types";
 import { DecoForm } from "../components/DecoForm";
@@ -10,7 +9,6 @@ import { Button, Confirm, useToast } from "../components/ui";
 export function Connect({ deco }: { deco: DecoStatus }) {
   const m = useDecoMutations();
   const toast = useToast();
-  const navigate = useNavigate();
   const [confirmRemove, setConfirmRemove] = useState(false);
   const fixing = deco.configured;
   const mut = fixing ? m.change : m.connect;
@@ -30,14 +28,7 @@ export function Connect({ deco }: { deco: DecoStatus }) {
           busy={mut.isPending}
           error={mut.error}
           submitLabel={fixing ? "Reconnect" : "Connect"}
-          onSubmit={(c) =>
-            mut.mutate(c, {
-              onSuccess: (d) => {
-                toast(d.discovery?.model ? `Connected to Deco ${d.discovery.model}` : "Connected to the Deco");
-                navigate("/", { replace: true });
-              },
-            })
-          }
+          onSubmit={(c) => mut.mutate(c)} // DecoGate opens the overview once connected
         />
         {fixing && (
           <div className="border-t border-line pt-4">

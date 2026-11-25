@@ -1,10 +1,11 @@
-import { useEffect, type ReactNode } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { useEffect, useRef, type ReactNode } from "react";
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { setCsrfToken, setUnauthorizedHandler } from "./api/client";
 import { useAuth, useDeco } from "./api/hooks";
 import { useLiveStream } from "./api/live";
 import { Shell } from "./components/Shell";
+import { useToast } from "./components/ui";
 import { Auth } from "./pages/Auth";
 import { Connect } from "./pages/Connect";
 import { Overview } from "./pages/Overview";
@@ -31,10 +32,25 @@ function Gate({ children }: { children: (user?: string) => ReactNode }) {
 /** Until a Deco is connected, the only page is the one that connects it. */
 function DecoGate({ children }: { children: ReactNode }) {
   const { data, isLoading } = useDeco();
-  if (isLoading) return null;
+  const navigate = useNavigate();
+  const toast = useToast();
   // While a stored Deco's connection is being changed it is briefly not
   // running; keep the app (and the dialog doing the change) on screen.
-  if (data && !data.running && !(data.configured && data.changing)) return <Connect deco={data} />;
+  const showConnect = !!data && !data.running && !(data.configured && data.changing);
+  // When the Connect page gives way to the app, open the overview. This
+  // lives here, not in Connect's mutation callback: the live stream can
+  // report the new connection first and unmount Connect before that
+  // callback runs, which would leave the browser on its old URL.
+  const wasConnect = useRef(false);
+  useEffect(() => {
+    if (wasConnect.current && !showConnect && data?.running) {
+      navigate("/", { replace: true });
+      toast(data.discovery?.model ? `Connected to Deco ${data.discovery.model}` : "Connected to the Deco");
+    }
+    wasConnect.current = showConnect;
+  }, [showConnect, data?.running]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (isLoading) return null;
+  if (showConnect) return <Connect deco={data} />;
   return <>{children}</>;
 }
 
