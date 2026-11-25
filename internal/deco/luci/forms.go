@@ -3,6 +3,7 @@ package luci
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/deco/fixture"
@@ -21,107 +22,114 @@ var (
 )
 
 type wireDevice struct {
-	MAC            string `json:"mac"`
-	Nickname       string `json:"nickname"`
-	CustomNickname string `json:"custom_nickname"`
-	Role           string `json:"role"`
-	DeviceModel    string `json:"device_model"`
-	DeviceIP       string `json:"device_ip"`
-	HardwareVer    string `json:"hardware_ver"`
-	SoftwareVer    string `json:"software_ver"`
-	GroupStatus    int    `json:"group_status"`
-	InetStatus     int    `json:"inet_status"`
-	Signal         struct {
-		Band24 int `json:"band2_4"`
-		Band5  int `json:"band5"`
-	} `json:"signal_strength"`
-	RxRateList []int  `json:"rx_rate_list"`
-	TxRateList []int  `json:"tx_rate_list"`
-	Previous   string `json:"previous"`
-	PortCount  int    `json:"port_count"`
+	MAC            string                  `json:"mac"`
+	Nickname       string                  `json:"nickname"`
+	CustomNickname string                  `json:"custom_nickname"`
+	Role           string                  `json:"role"`
+	DeviceModel    string                  `json:"device_model"`
+	DeviceIP       string                  `json:"device_ip"`
+	HardwareVer    string                  `json:"hardware_ver"`
+	SoftwareVer    string                  `json:"software_ver"`
+	GroupStatus    string                  `json:"group_status"`
+	InetStatus     string                  `json:"inet_status"`
+	Signal         map[string]deco.FlexInt `json:"signal_strength"`
+	Previous       string                  `json:"previous"`
 }
 
-// Devices lists the mesh nodes (area device, form device_list).
+// Devices lists the mesh nodes (area device, form device_list). The local
+// API identifies nodes by MAC, so Device.ID is the MAC; status strings
+// follow the same values as the TMP device list.
 func (c *Client) Devices(ctx context.Context) ([]deco.Device, error) {
 	raw, err := c.call(ctx, "device", "device_list", "read", nil)
 	if err != nil {
 		return nil, err
 	}
 	var w struct {
-		DeviceList []wireDevice `json:"device_list"`
+		DeviceList []json.RawMessage `json:"device_list"`
 	}
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return nil, err
 	}
 	out := make([]deco.Device, 0, len(w.DeviceList))
-	for _, d := range w.DeviceList {
+	for _, item := range w.DeviceList {
+		var d wireDevice
+		if json.Unmarshal(item, &d) != nil {
+			continue // one unreadable node must not hide the others
+		}
 		name := decodeName(d.CustomNickname)
 		if name == "" {
 			name = decodeName(d.Nickname)
 		}
-		out = append(out, deco.Device{
-			MAC:         normalizeMAC(d.MAC),
-			Nickname:    name,
-			Role:        d.Role,
-			Model:       d.DeviceModel,
-			IP:          d.DeviceIP,
-			HardwareVer: d.HardwareVer,
-			SoftwareVer: d.SoftwareVer,
-			GroupStatus: d.GroupStatus,
-			InetStatus:  d.InetStatus,
-			Signal24:    d.Signal.Band24,
-			Signal5:     d.Signal.Band5,
-			RxRates:     d.RxRateList,
-			TxRates:     d.TxRateList,
-			Previous:    normalizeMAC(d.Previous),
-			PortCount:   d.PortCount,
-		})
+		mac := normalizeMAC(d.MAC)
+		dev := deco.Device{
+			ID: mac, MAC: mac, IP: d.DeviceIP, Nickname: name, Model: d.DeviceModel,
+			HardwareVer: d.HardwareVer, SoftwareVer: d.SoftwareVer,
+			Master:         strings.EqualFold(d.Role, "master"),
+			Online:         !strings.EqualFold(d.GroupStatus, "disconnected"),
+			InternetOnline: strings.EqualFold(d.InetStatus, "online"),
+			Role:           d.Role, GroupStatus: d.GroupStatus, InetStatus: d.InetStatus,
+		}
+		if !dev.Master {
+			dev.ParentID = normalizeMAC(d.Previous)
+			dev.Backhaul = deco.Backhaul{Type: deco.BackhaulWiFi}
+			if len(d.Signal) > 0 {
+				dev.Backhaul.Signal = map[string]int{}
+				for band, v := range d.Signal {
+					dev.Backhaul.Signal[deco.NormalizeBand(band)] = int(v)
+				}
+			}
+		}
+		out = append(out, dev)
 	}
 	return out, nil
 }
 
 type wireClient struct {
-	MAC            string `json:"mac"`
-	IP             string `json:"ip"`
-	Name           string `json:"name"`
-	Online         bool   `json:"online"`
-	WireType       string `json:"wire_type"`
-	ConnectionType string `json:"connection_type"`
-	Interface      string `json:"interface"`
-	UpSpeed        int64  `json:"up_speed"`
-	DownSpeed      int64  `json:"down_speed"`
+	MAC            string        `json:"mac"`
+	IP             string        `json:"ip"`
+	Name           string        `json:"name"`
+	Online         deco.FlexBool `json:"online"`
+	WireType       string        `json:"wire_type"`
+	ConnectionType string        `json:"connection_type"`
+	Interface      string        `json:"interface"`
+	UpSpeed        deco.FlexInt  `json:"up_speed"`
+	DownSpeed      deco.FlexInt  `json:"down_speed"`
 }
 
-// Clients lists Wi-Fi/wired clients seen by one node, or by all nodes when nodeMAC is empty
-// (area client, form client_list, device_mac "default").
-func (c *Client) Clients(ctx context.Context, nodeMAC string) ([]deco.WifiClient, error) {
+// Clients lists clients seen by one node (a Device.ID, i.e. its MAC here),
+// or by all nodes when node is empty (area client, form client_list).
+// Speeds are taken as kbps like the TMP API; unverified on luci firmware.
+func (c *Client) Clients(ctx context.Context, node string) ([]deco.WifiClient, error) {
 	mac := "default"
-	if nodeMAC != "" {
-		mac = wireMAC(nodeMAC)
+	if node != "" {
+		mac = wireMAC(node)
 	}
 	raw, err := c.call(ctx, "client", "client_list", "read", map[string]string{"device_mac": mac})
 	if err != nil {
 		return nil, err
 	}
 	var w struct {
-		ClientList []wireClient `json:"client_list"`
+		ClientList []json.RawMessage `json:"client_list"`
 	}
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return nil, err
 	}
 	out := make([]deco.WifiClient, 0, len(w.ClientList))
-	for _, cl := range w.ClientList {
-		out = append(out, deco.WifiClient{
-			MAC:            normalizeMAC(cl.MAC),
-			IP:             cl.IP,
-			Name:           decodeName(cl.Name),
-			Online:         cl.Online,
-			WireType:       cl.WireType,
-			ConnectionType: cl.ConnectionType,
-			Interface:      cl.Interface,
-			UpSpeed:        cl.UpSpeed,
-			DownSpeed:      cl.DownSpeed,
-		})
+	for _, item := range w.ClientList {
+		var cl wireClient
+		if json.Unmarshal(item, &cl) != nil {
+			continue
+		}
+		wired := strings.EqualFold(cl.WireType, "wired")
+		c := deco.WifiClient{
+			MAC: normalizeMAC(cl.MAC), IP: cl.IP, Name: decodeName(cl.Name),
+			Online: bool(cl.Online), Network: cl.Interface, Wired: wired, NodeID: node,
+			UpBps: int64(cl.UpSpeed) * 1000, DownBps: int64(cl.DownSpeed) * 1000,
+		}
+		if !wired {
+			c.Band = deco.NormalizeBand(cl.ConnectionType)
+		}
+		out = append(out, c)
 	}
 	return out, nil
 }
@@ -191,21 +199,31 @@ func (c *Client) Wireless(ctx context.Context) (*deco.WirelessConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	var w map[string]map[string]struct {
-		Enable bool   `json:"enable"`
-		SSID   string `json:"ssid"`
-	}
+	var w map[string]map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return nil, err
 	}
-	out := &deco.WirelessConfig{Bands: make(map[string]map[string]deco.NetworkConfig, len(w))}
+	out := &deco.WirelessConfig{Bands: make(map[string]deco.Band, len(w))}
 	for band, nets := range w {
-		out.Bands[band] = make(map[string]deco.NetworkConfig, len(nets))
-		for name, n := range nets {
-			out.Bands[band][name] = deco.NetworkConfig{Enable: n.Enable, SSID: decodeName(n.SSID)}
+		b := deco.Band{Networks: make(map[string]deco.NetworkConfig, len(nets))}
+		for name, nraw := range nets {
+			var n struct {
+				Enable deco.FlexBool `json:"enable"`
+				SSID   string        `json:"ssid"`
+			}
+			if json.Unmarshal(nraw, &n) != nil {
+				continue
+			}
+			b.Networks[name] = deco.NetworkConfig{Enable: bool(n.Enable), SSID: decodeName(n.SSID)}
 		}
+		out.Bands[band] = b
 	}
 	return out, nil
+}
+
+// Firmware is not available through the local web API.
+func (c *Client) Firmware(context.Context) ([]deco.Firmware, error) {
+	return nil, deco.ErrUnsupported
 }
 
 // Raw returns the decrypted result of a read-only call, with secret-bearing

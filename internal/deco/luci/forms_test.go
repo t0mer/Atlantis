@@ -43,7 +43,7 @@ func TestReadFormsMapToModel(t *testing.T) {
 	if err != nil || len(devs) != 1 {
 		t.Fatalf("Devices: %v (%d)", err, len(devs))
 	}
-	if devs[0].MAC != "aa:bb:cc:dd:ee:01" || devs[0].Nickname != "שלום" || devs[0].Role != "master" {
+	if d := devs[0]; d.MAC != "aa:bb:cc:dd:ee:01" || d.ID != d.MAC || d.Nickname != "שלום" || !d.Master || !d.Online || !d.InternetOnline {
 		t.Fatalf("device mapping wrong: %+v", devs[0])
 	}
 
@@ -72,10 +72,10 @@ func TestReadFormsMapToModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h := wl.Bands["band2_4"]["host"]; !h.Enable || h.SSID != "הבית" {
+	if h := wl.Bands["band2_4"].Networks["host"]; !h.Enable || h.SSID != "הבית" {
 		t.Fatalf("wireless band2_4/host wrong: %+v", h)
 	}
-	if g := wl.Bands["band5_1"]["guest"]; g.Enable {
+	if g := wl.Bands["band5_1"].Networks["guest"]; g.Enable {
 		t.Fatalf("guest should be disabled: %+v", g)
 	}
 }

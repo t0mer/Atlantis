@@ -54,7 +54,7 @@ func New() *Device {
 		results: map[tmp.Opcode]any{
 			tmp.OpCompNegotiate: map[string]any{"component_list": []any{}, "operation_mode": "Router"},
 			tmp.OpDeviceListGet: map[string]any{"device_list": []any{map[string]any{
-				"device_id": "dev-1", "mac": "AA-BB-CC-DD-EE-01", "nickname": "TGl2aW5n", "role": "master",
+				"device_id": "dev-1", "mac": "AA-BB-CC-DD-EE-01", "nickname": "custom", "custom_nickname": "TGl2aW5n", "role": "master",
 			}}},
 		},
 	}

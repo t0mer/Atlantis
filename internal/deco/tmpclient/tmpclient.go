@@ -2,8 +2,8 @@
 // any transport that yields a byte stream: the TP-Link cloud relay
 // (internal/deco/cloud) or SSH on the LAN (internal/deco/tmp/sshconn).
 //
-// Typed reads return ErrNotImplemented until their responses have been
-// recorded from real hardware (CLAUDE.md §12.2); Raw works now.
+// Typed reads map the device's replies into the transport-agnostic deco
+// models for every Deco model (see parse.go).
 package tmpclient
 
 import (
@@ -27,8 +27,10 @@ type Dialer func(ctx context.Context, logf func(string, ...any)) (io.ReadWriteCl
 // "DEVICE_LIST_GET".
 const RawArea = "tmp"
 
-// ErrNotImplemented is returned by typed reads not yet mapped from fixtures.
-var ErrNotImplemented = errors.New("tmpclient: not implemented until fixtures are recorded")
+// ErrNotImplemented is kept for callers written against the stubs.
+//
+// Deprecated: every typed read is implemented.
+var ErrNotImplemented = errors.New("tmpclient: not implemented")
 
 var _ deco.Client = (*Client)(nil)
 
@@ -164,14 +166,143 @@ func (c *Client) RawParams(ctx context.Context, area, form string, params any) (
 	return fixture.Redact(res)
 }
 
-func (c *Client) Devices(context.Context) ([]deco.Device, error) { return nil, ErrNotImplemented }
-func (c *Client) Clients(context.Context, string) ([]deco.WifiClient, error) {
-	return nil, ErrNotImplemented
+// Devices lists the mesh nodes (DEVICE_LIST_GET).
+func (c *Client) Devices(ctx context.Context) ([]deco.Device, error) {
+	raw, err := c.Request(ctx, tmp.OpDeviceListGet, nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseDevices(raw)
 }
-func (c *Client) WAN(context.Context) (*deco.WANStatus, error) { return nil, ErrNotImplemented }
-func (c *Client) Performance(context.Context) (*deco.Performance, error) {
-	return nil, ErrNotImplemented
+
+// Clients lists clients, online and offline, with current rates
+// (CLIENT_LIST_GET + CLIENT_LIST_SPEED_GET). node filters by Device.ID.
+func (c *Client) Clients(ctx context.Context, node string) ([]deco.WifiClient, error) {
+	nodes, err := c.Devices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	masterID := ""
+	for _, n := range nodes {
+		if n.Master {
+			masterID = n.ID
+		}
+	}
+	raw, err := c.Request(ctx, tmp.OpClientListGet, nil)
+	if err != nil {
+		return nil, err
+	}
+	speeds, err := c.Request(ctx, tmp.OpClientListSpeedGet, nil)
+	if err != nil {
+		speeds = nil // rates are optional; the list itself still counts
+	}
+	all, err := parseClients(raw, speeds, masterID)
+	if err != nil || node == "" {
+		return all, err
+	}
+	var out []deco.WifiClient
+	for _, cl := range all {
+		if cl.NodeID == node {
+			out = append(out, cl)
+		}
+	}
+	return out, nil
 }
-func (c *Client) Wireless(context.Context) (*deco.WirelessConfig, error) {
-	return nil, ErrNotImplemented
+
+// Wireless reads every band's networks (WIRELESS_GET), plus the Wi-Fi 7
+// multi-link network as band "mlo" when the Deco has one.
+func (c *Client) Wireless(ctx context.Context) (*deco.WirelessConfig, error) {
+	raw, err := c.Request(ctx, tmp.OpWirelessGet, nil)
+	if err != nil {
+		return nil, err
+	}
+	w, err := parseWireless(raw)
+	if err != nil {
+		return nil, err
+	}
+	// The component name that gates MLO is not known, so ask and ignore
+	// the error a Deco without multi-link answers with.
+	if mraw, err := c.Request(ctx, tmp.OpMLONetworkGet, nil); err == nil {
+		if b := parseMLO(mraw); b != nil {
+			w.Bands["mlo"] = *b
+		}
+	}
+	return w, nil
+}
+
+// Firmware reports available updates per model (FW_LATEST_GET).
+func (c *Client) Firmware(ctx context.Context) ([]deco.Firmware, error) {
+	raw, err := c.Request(ctx, tmp.OpFWLatestGet, nil)
+	if err != nil {
+		return nil, unsupported(err)
+	}
+	return parseFirmware(raw)
+}
+
+// WAN reads the main unit's WAN addressing (IPV4_GET). Decos without the
+// "wan"/"dsl_wan" component (for example in access-point mode) return
+// deco.ErrUnsupported, as the app hides the page for them.
+func (c *Client) WAN(ctx context.Context) (*deco.WANStatus, error) {
+	if !c.hasComponent(ctx, "wan") && !c.hasComponent(ctx, "dsl_wan") {
+		return nil, deco.ErrUnsupported
+	}
+	raw, err := c.Request(ctx, tmp.OpIPv4Get, nil)
+	if err != nil {
+		return nil, unsupported(err)
+	}
+	online := false
+	if nodes, err := c.Devices(ctx); err == nil {
+		for _, n := range nodes {
+			if n.Master {
+				online = n.InternetOnline
+			}
+		}
+	}
+	return parseWAN(raw, online)
+}
+
+// Performance reads the main unit's CPU and memory load
+// (DEVICE_RESOURCE_INFO_GET). As in the app, it is asked only when the
+// Deco negotiated "device_resource"; otherwise deco.ErrUnsupported.
+func (c *Client) Performance(ctx context.Context) (*deco.Performance, error) {
+	if !c.hasComponent(ctx, "device_resource") {
+		return nil, deco.ErrUnsupported
+	}
+	nodes, err := c.Devices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var master string
+	for _, n := range nodes {
+		if n.Master {
+			master = n.ID
+		}
+	}
+	if master == "" {
+		return nil, deco.ErrUnsupported
+	}
+	raw, err := c.Request(ctx, tmp.OpDeviceResourceInfoGet,
+		map[string]any{"device_list": []map[string]string{{"device_id": master}}})
+	if err != nil {
+		return nil, unsupported(err)
+	}
+	return parsePerformance(raw)
+}
+
+// hasComponent reports whether the session's COMP_NEGOTIATE listed id.
+func (c *Client) hasComponent(ctx context.Context, id string) bool {
+	if err := c.Login(ctx); err != nil {
+		return false
+	}
+	return components(c.Negotiation())[id]
+}
+
+// unsupported maps the device's "business failed" answer (AppV2 err 12)
+// and unknown-operation answers to deco.ErrUnsupported.
+func unsupported(err error) error {
+	var ae tmp.AppV2Error
+	if errors.As(err, &ae) && (ae.Code == 12 || ae.Code == 4) {
+		return fmt.Errorf("%w (%v)", deco.ErrUnsupported, err)
+	}
+	return err
 }

@@ -88,10 +88,12 @@ func TestRawRefusesUnknownAndWriteOpcodes(t *testing.T) {
 	}
 }
 
-func TestTypedReadsNotImplementedYet(t *testing.T) {
+func TestTypedDevicesThroughRelay(t *testing.T) {
 	c, _, _ := setup(t)
-	if _, err := c.Devices(context.Background()); !errors.Is(err, cloud.ErrNotImplemented) {
-		t.Fatalf("got %v", err)
+	defer c.Logout(context.Background())
+	devs, err := c.Devices(context.Background())
+	if err != nil || len(devs) != 1 || devs[0].ID != "dev-1" || !devs[0].Master || devs[0].Nickname != "Living" {
+		t.Fatalf("%+v %v", devs, err)
 	}
 }
 

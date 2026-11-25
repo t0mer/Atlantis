@@ -180,7 +180,7 @@ func defaultResults() map[string]any {
 				map[string]any{
 					"mac": "AA-BB-CC-DD-EE-01", "nickname": "", "custom_nickname": b64("שלום"),
 					"role": "master", "device_model": "Deco X20", "device_ip": "192.168.68.1",
-					"hardware_ver": "1.0", "software_ver": "1.2.3", "group_status": 1, "inet_status": 1,
+					"hardware_ver": "1.0", "software_ver": "1.2.3", "group_status": "connected", "inet_status": "online",
 					"signal_strength": map[string]int{"band2_4": 0, "band5": 0},
 					"rx_rate_list":    []int{0}, "tx_rate_list": []int{0}, "previous": "", "port_count": 4,
 				},
