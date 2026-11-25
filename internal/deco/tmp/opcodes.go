@@ -23,7 +23,6 @@ const (
 	OpFWLatestGet              Opcode = 0x401C
 	OpWANInfoGet               Opcode = 0x407B
 	OpDeviceSignalLevelListGet Opcode = 0x4094
-	OpHostNetworkGet           Opcode = 0x422D
 	OpDeviceResourceInfoGet    Opcode = 0x4317
 )
 
@@ -32,8 +31,8 @@ var opNames = map[Opcode]string{
 	OpCompNegotiate: "COMP_NEGOTIATE", OpWirelessGet: "WIRELESS_GET", OpDeviceListGet: "DEVICE_LIST_GET",
 	OpClientListGet: "CLIENT_LIST_GET", OpClientListSpeedGet: "CLIENT_LIST_SPEED_GET",
 	OpBlockedListGet: "BLOCKED_LIST_GET", OpFWLatestGet: "FW_LATEST_GET", OpWANInfoGet: "WAN_INFO_GET",
-	OpDeviceSignalLevelListGet: "DEVICE_SIGNAL_LEVEL_LIST_GET", OpHostNetworkGet: "HOST_NETWORK_GET",
-	OpDeviceResourceInfoGet: "DEVICE_RESOURCE_INFO_GET",
+	OpDeviceSignalLevelListGet: "DEVICE_SIGNAL_LEVEL_LIST_GET",
+	OpDeviceResourceInfoGet:    "DEVICE_RESOURCE_INFO_GET",
 }
 
 func (o Opcode) String() string {
@@ -51,7 +50,7 @@ var allowed = map[Opcode]bool{
 	OpTokenAlloc: true, OpTokenVerify: true, OpTokenFree: true, OpCompNegotiate: true,
 	OpWirelessGet: true, OpDeviceListGet: true, OpClientListGet: true, OpClientListSpeedGet: true,
 	OpBlockedListGet: true, OpFWLatestGet: true, OpWANInfoGet: true,
-	OpDeviceSignalLevelListGet: true, OpHostNetworkGet: true, OpDeviceResourceInfoGet: true,
+	OpDeviceSignalLevelListGet: true, OpDeviceResourceInfoGet: true,
 }
 
 // Allowed reports whether op may be sent.
@@ -62,4 +61,14 @@ type ErrOpcodeNotAllowed struct{ Op Opcode }
 
 func (e ErrOpcodeNotAllowed) Error() string {
 	return fmt.Sprintf("tmp: opcode %s is not on the allowlist", e.Op)
+}
+
+// OpcodeByName looks up a known opcode by its app name, e.g. "DEVICE_LIST_GET".
+func OpcodeByName(name string) (Opcode, bool) {
+	for op, n := range opNames {
+		if n == name {
+			return op, true
+		}
+	}
+	return 0, false
 }
