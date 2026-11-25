@@ -237,7 +237,12 @@ func (c *Client) Wireless(ctx context.Context) (*deco.WirelessConfig, error) {
 // Raw returns the decrypted result of a read-only call, with secret-bearing
 // fields (passwords, tokens) replaced by "[redacted]". Debug use only.
 func (c *Client) Raw(ctx context.Context, area, form string) (json.RawMessage, error) {
-	raw, err := c.call(ctx, area, form, "read", nil)
+	return c.RawParams(ctx, area, form, nil)
+}
+
+// RawParams is Raw with request params, for forms that need them (client_list).
+func (c *Client) RawParams(ctx context.Context, area, form string, params any) (json.RawMessage, error) {
+	raw, err := c.call(ctx, area, form, "read", params)
 	if err != nil {
 		return nil, err
 	}
