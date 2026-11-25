@@ -107,9 +107,12 @@ test("rename and watch a client", async ({ page }) => {
 test("Wi-Fi change needs the typed confirmation", async ({ page }) => {
   await signIn(page);
   await page.goto("/wifi");
-  await page.getByLabel("Network name").fill("Example-Net");
-  await page.getByLabel("Password").fill("example-pass-123");
-  await page.getByRole("button", { name: "Change Wi-Fi" }).click();
+  const main = page.locator("section", { has: page.getByRole("heading", { name: "Main network" }) });
+  await main.getByRole("button", { name: "Edit" }).click();
+  const edit = page.getByRole("dialog");
+  await edit.getByLabel("Network name").fill("Example-Net");
+  await edit.getByLabel("Password").fill("example-pass-123");
+  await edit.getByRole("button", { name: "Save" }).click();
   const dialog = page.getByRole("alertdialog");
   const confirm = dialog.getByRole("button", { name: "Change Wi-Fi" });
   await expect(confirm).toBeDisabled();
@@ -117,6 +120,24 @@ test("Wi-Fi change needs the typed confirmation", async ({ page }) => {
   await expect(confirm).toBeEnabled();
   if (shots) await page.screenshot({ path: `${shots}/wifi-confirm.png` });
   await dialog.getByRole("button", { name: "Cancel" }).click();
+});
+
+test("turn the guest network off and rename it", async ({ page }) => {
+  await signIn(page);
+  await page.goto("/wifi");
+  const guest = page.locator("section", { has: page.getByRole("heading", { name: "Guest network" }) });
+  await guest.getByRole("switch").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Turn off" }).click();
+  await expect(page.getByText("Guest network turned off")).toBeVisible();
+  await expect(guest.getByText("Off", { exact: true })).toBeVisible();
+
+  await guest.getByRole("button", { name: "Edit" }).click();
+  const edit = page.getByRole("dialog");
+  await edit.getByLabel("Network name").fill("Visitors");
+  if (shots) await page.screenshot({ path: `${shots}/wifi-edit.png` });
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Guest network changed")).toBeVisible();
+  await expect(guest.locator("dd", { hasText: "Visitors" })).toBeVisible();
 });
 
 test("add a notification channel", async ({ page }) => {
