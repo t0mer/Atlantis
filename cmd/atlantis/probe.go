@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/t0mer/atlantis/internal/deco"
+	"github.com/t0mer/atlantis/internal/deco/fixture"
 	"github.com/t0mer/atlantis/internal/deco/luci"
 )
 
@@ -149,7 +150,7 @@ func dumpFixtures(ctx context.Context, c *luci.Client, dir string) []string {
 		fmt.Fprintf(os.Stderr, "dump: %v\n", err)
 		return []string{"dump"}
 	}
-	san := luci.NewSanitizer()
+	san := fixture.NewSanitizer()
 	var failed []string
 	written := 0
 	for _, s := range probeSteps {

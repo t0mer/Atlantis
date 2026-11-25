@@ -1,4 +1,4 @@
-package luci
+package fixture
 
 import (
 	"bytes"
@@ -25,6 +25,35 @@ var (
 	// IPv6 candidates; each is validated with net.ParseIP before replacement.
 	ipv6RE = regexp.MustCompile(`(?i)[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}`)
 )
+
+// Redact replaces the value of every secret-named key, at any depth, with
+// "[redacted]". Unlike Sanitize it keeps identifiers; it is for debug output.
+// Numbers are kept exactly.
+func Redact(raw json.RawMessage) (json.RawMessage, error) {
+	v, err := decodeExact(raw)
+	if err != nil {
+		return nil, err
+	}
+	redactValue(v)
+	return json.Marshal(v)
+}
+
+func redactValue(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if isSecretKey(normKey(k)) {
+				t[k] = "[redacted]"
+			} else {
+				redactValue(val)
+			}
+		}
+	case []any:
+		for _, e := range t {
+			redactValue(e)
+		}
+	}
+}
 
 // normKey lowercases a key and drops separators: "Device_Name" -> "devicename".
 func normKey(k string) string {

@@ -1,4 +1,4 @@
-package luci
+package fixture
 
 import (
 	"encoding/base64"
@@ -120,11 +120,11 @@ func TestSanitizeIPReplacementsStayUnique(t *testing.T) {
 }
 
 func TestRawKeepsNumbersExactly(t *testing.T) {
-	out, err := redactJSON(json.RawMessage(`{"id":12345678901234567890,"password":"x"}`))
+	out, err := Redact(json.RawMessage(`{"id":12345678901234567890,"password":"x"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(out), "12345678901234567890") || strings.Contains(string(out), `"x"`) {
-		t.Fatalf("redactJSON output wrong: %s", out)
+		t.Fatalf("Redact output wrong: %s", out)
 	}
 }
