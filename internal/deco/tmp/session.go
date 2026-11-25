@@ -10,6 +10,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/t0mer/atlantis/internal/deco"
 )
 
 // AppV2 header error codes (business/v2/o.java P()).
@@ -34,6 +36,12 @@ var byeReasons = map[byte]string{
 
 // ByeError means the device closed the session.
 type ByeError struct{ Reason byte }
+
+// Is lets errors.Is(err, deco.ErrOtherAdmin) match byes caused by the
+// device's admin-session limits.
+func (e ByeError) Is(target error) bool {
+	return target == deco.ErrOtherAdmin && (e.Reason == 3 || e.Reason == 7 || e.Reason == 16)
+}
 
 func (e ByeError) Error() string {
 	n := byeReasons[e.Reason]

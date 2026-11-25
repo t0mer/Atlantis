@@ -16,8 +16,11 @@ var (
 	ErrWrongPassword = errors.New("deco: wrong management password")
 	// ErrOtherAdmin means another admin session is active on the device (HTTP 403 at login).
 	ErrOtherAdmin = errors.New("deco: another admin session is active")
-	// ErrCertChanged means the TLS certificate fingerprint no longer matches the pinned one.
+	// ErrCertChanged means the pinned TLS certificate or SSH host key no longer matches.
 	ErrCertChanged = errors.New("deco: TLS certificate fingerprint changed")
+	// ErrCertUnknown means no certificate or host key is pinned yet and the
+	// transport will not trust one without an explicit accept.
+	ErrCertUnknown = errors.New("deco: certificate or host key not trusted yet")
 	// ErrAuthFailed is returned without contacting the device after ErrWrongPassword,
 	// until the client is reset with a new password.
 	ErrAuthFailed = errors.New("deco: authentication previously failed; reset credentials")

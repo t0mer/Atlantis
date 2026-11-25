@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/t0mer/atlantis/internal/deco"
 )
 
 const (
@@ -31,12 +33,12 @@ const (
 var (
 	// ErrAuthFailed means the Deco rejected the TP-Link ID credentials. Do
 	// not retry: the Deco counts failures and locks out.
-	ErrAuthFailed = errors.New("sshconn: the Deco rejected the TP-Link ID credentials")
+	ErrAuthFailed = fmt.Errorf("sshconn: the Deco rejected the TP-Link ID credentials: %w", deco.ErrWrongPassword)
 	// ErrHostKeyChanged means the host key differs from the pinned one.
-	ErrHostKeyChanged = errors.New("sshconn: SSH host key changed")
+	ErrHostKeyChanged = fmt.Errorf("sshconn: SSH host key changed: %w", deco.ErrCertChanged)
 	// ErrUnknownHostKey means no key is pinned and AcceptNew is false. The
 	// password is not sent.
-	ErrUnknownHostKey = errors.New("sshconn: unknown SSH host key")
+	ErrUnknownHostKey = fmt.Errorf("sshconn: unknown SSH host key: %w", deco.ErrCertUnknown)
 )
 
 // Options configure Dial.
