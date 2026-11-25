@@ -34,6 +34,18 @@ type fakeDeco struct {
 	mu       sync.Mutex
 	ssid     string
 	wifiSets int
+	renames  []string // "mac=name"
+}
+
+func (f *fakeDeco) CanRenameClients() bool { return true }
+func (f *fakeDeco) RenameClient(_ context.Context, mac, name string) error {
+	if deco.NormalizeMAC(mac) != "aa:bb:cc:dd:ee:01" {
+		return deco.ErrNotFound
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renames = append(f.renames, mac+"="+name)
+	return nil
 }
 
 func (f *fakeDeco) Login(context.Context) error  { return nil }

@@ -215,6 +215,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, deco.ErrUnsupported):
 		writeError(w, http.StatusNotImplemented, "not supported by this Deco")
+	case errors.Is(err, deco.ErrNotVerified):
+		writeError(w, http.StatusNotImplemented, "not available yet: "+err.Error())
 	case errors.Is(err, site.ErrNoDeco):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "no_deco"})
 	default:
