@@ -3,8 +3,10 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -152,5 +154,39 @@ func TestSecretsAreSealed(t *testing.T) {
 	c, err := d.OpenConfig(chs[0])
 	if err != nil || !strings.HasPrefix(c.URL, "telegram://") {
 		t.Fatal(c, err)
+	}
+}
+
+// Review finding: tokens in any URL part must not reach errors.
+func TestRedactURLParts(t *testing.T) {
+	raw := "generic+http://user:pa55word@127.0.0.1:1/hook/PATHSECRET99?token=SUPERSECRET123"
+	err := redact(errors.New(`Post "http://127.0.0.1:1/hook/PATHSECRET99?token=SUPERSECRET123": refused (pa55word)`), urlSecrets(raw)...)
+	for _, s := range []string{"SUPERSECRET123", "PATHSECRET99", "pa55word"} {
+		if strings.Contains(err.Error(), s) {
+			t.Fatalf("leaked %s: %v", s, err)
+		}
+	}
+}
+
+// Review finding: a channel that never answers must not block past ctx.
+func TestShoutrrrSendHonoursContext(t *testing.T) {
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // accept and never answer
+		}
+	}()
+	s, _ := NewSender(KindShoutrrr, Config{URL: "generic+http://" + ln.Addr().String() + "/hook?token=SUPERSECRET123"})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := s.Send(ctx, "hi")
+	if err == nil || time.Since(start) > 3*time.Second || strings.Contains(err.Error(), "SUPERSECRET123") {
+		t.Fatalf("%v after %s", err, time.Since(start))
 	}
 }

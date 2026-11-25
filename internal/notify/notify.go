@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -85,11 +87,21 @@ type Sender interface {
 
 type shoutrrrSender struct{ url string }
 
-func (s shoutrrrSender) Send(_ context.Context, text string) error {
-	if err := shoutrrr.Send(s.url, text); err != nil {
-		return redact(err, s.url)
+// Send honours ctx: Shoutrrr itself has no deadline (it uses
+// http.DefaultClient), so the send runs aside and is abandoned when ctx
+// ends. serve also bounds http.DefaultClient so abandoned sends finish.
+func (s shoutrrrSender) Send(ctx context.Context, text string) error {
+	done := make(chan error, 1)
+	go func() { done <- shoutrrr.Send(s.url, text) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return redact(err, urlSecrets(s.url)...)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("shoutrrr: %w", ctx.Err())
 	}
-	return nil
 }
 
 // openWASender posts to OpenWA's /sendText with the api_key header.
@@ -110,7 +122,7 @@ func (s openWASender) Send(ctx context.Context, text string) error {
 	}
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return redact(err, s.cfg.APIKey)
+		return redact(err, append(urlSecrets(s.cfg.URL), s.cfg.APIKey, s.cfg.Chat)...)
 	}
 	resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -119,13 +131,42 @@ func (s openWASender) Send(ctx context.Context, text string) error {
 	return nil
 }
 
-// redact removes a secret (URL with token, API key) from an error message.
-func redact(err error, secret string) error {
+// redact removes secrets from an error message. Services quote the URL
+// they called, which differs from the configured one, so every secret part
+// is replaced on its own.
+func redact(err error, secrets ...string) error {
 	msg := err.Error()
-	if secret != "" {
-		msg = strings.ReplaceAll(msg, secret, "[redacted]")
+	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
+	for _, s := range secrets {
+		if len(s) >= 4 {
+			msg = strings.ReplaceAll(msg, s, "[redacted]")
+		}
 	}
 	return errors.New(msg)
+}
+
+// urlSecrets lists the parts of a notification URL that may be secret: the
+// whole URL, user info, every query value and every path segment (Telegram
+// and Discord put tokens in the path).
+func urlSecrets(raw string) []string {
+	out := []string{raw}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return out
+	}
+	if u.User != nil {
+		out = append(out, u.User.Username())
+		if p, ok := u.User.Password(); ok {
+			out = append(out, p)
+		}
+	}
+	for _, vs := range u.Query() {
+		out = append(out, vs...)
+	}
+	for _, seg := range strings.Split(u.Path, "/") {
+		out = append(out, seg)
+	}
+	return out
 }
 
 // NewSender builds the sender for a channel kind and its opened config.
