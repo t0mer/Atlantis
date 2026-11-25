@@ -1,0 +1,340 @@
+openapi: 3.0.3
+info:
+  title: Atlantis API
+  version: "1"
+  description: |
+    Monitor and manage one TP-Link Deco mesh site over the LAN.
+
+    **Auth.** Create the admin account once with `POST /api/v1/auth/setup`, then
+    `POST /api/v1/auth/login`. Both set an `HttpOnly; SameSite=Strict` session
+    cookie and return a `csrf_token`. Every request except `/health` and
+    `/api/v1/auth/*` needs the cookie; every non-GET request also needs the
+    `X-CSRF-Token` header.
+
+    **Writes.** Only actions verified on a real Deco are performed: changing the
+    main Wi-Fi SSID and password. Reboot and Wi-Fi on/off answer `501` until
+    they are verified. Secrets (passwords, channel URLs and tokens) are
+    write-only and never returned.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: atlantis_session
+    csrf:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+  schemas:
+    Error:
+      type: object
+      properties: { error: { type: string } }
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, minLength: 10, writeOnly: true }
+    SessionStatus:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [idle, connected, paused, blocked_by_other_admin, auth_failed, cert_changed, cert_unknown, disconnected]
+        since: { type: string, format: date-time }
+        error: { type: string }
+        retry_at: { type: string, format: date-time }
+        last_ok: { type: string, format: date-time }
+        logins: { type: integer }
+        paused_for: { type: string }
+    Backhaul:
+      type: object
+      properties:
+        Type: { type: string, enum: ["", wired, wifi, plc, plc+wifi, other] }
+        Links: { type: array, items: { type: string } }
+        Signal: { type: object, additionalProperties: { type: integer } }
+    Node:
+      type: object
+      properties:
+        ID: { type: string }
+        MAC: { type: string }
+        IP: { type: string }
+        Nickname: { type: string }
+        Model: { type: string }
+        HardwareVer: { type: string }
+        SoftwareVer: { type: string }
+        Master: { type: boolean }
+        Online: { type: boolean }
+        InternetOnline: { type: boolean }
+        InternetError: { type: string }
+        ParentID: { type: string }
+        Backhaul: { $ref: "#/components/schemas/Backhaul" }
+        first_seen: { type: string, format: date-time }
+        last_seen: { type: string, format: date-time }
+        clients: { type: integer }
+    Client:
+      type: object
+      properties:
+        mac: { type: string }
+        name: { type: string }
+        alias: { type: string }
+        display_name: { type: string }
+        type: { type: string }
+        watch: { type: boolean }
+        tags: { type: array, items: { type: string } }
+        online: { type: boolean }
+        ip: { type: string }
+        node_id: { type: string }
+        band: { type: string, description: "band2_4, band5_1, band6, ... or empty when wired" }
+        network: { type: string, description: "main, guest, iot, mlo" }
+        wired: { type: boolean }
+        signal_level: { type: integer, description: "bars; 3+ strong" }
+        up_bps: { type: integer }
+        down_bps: { type: integer }
+        private_mac: { type: boolean }
+        first_seen: { type: string, format: date-time }
+        last_seen: { type: string, format: date-time }
+    Point:
+      type: object
+      properties:
+        ts: { type: string, format: date-time }
+        online: { type: number, description: "0..1; a fraction of the hour for rollups" }
+        up_bps: { type: integer }
+        down_bps: { type: integer }
+        clients: { type: number }
+        cpu: { type: number }
+        mem: { type: number }
+    Event:
+      type: object
+      properties:
+        id: { type: integer }
+        ts: { type: string, format: date-time }
+        type:
+          type: string
+          enum: [client.joined, client.online, client.offline, node.online, node.offline, wan.up, wan.down, wan.ip_changed, firmware.changed]
+        subject: { type: string }
+        payload: { type: object }
+    ChannelConfig:
+      type: object
+      description: Write-only. shoutrrr uses url; openwa uses url (base), api_key and chat.
+      properties:
+        url: { type: string, writeOnly: true }
+        api_key: { type: string, writeOnly: true }
+        chat: { type: string, writeOnly: true }
+    Channel:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        kind: { type: string, enum: [shoutrrr, openwa] }
+        name: { type: string }
+        enabled: { type: boolean }
+        events: { type: array, items: { type: string }, description: "empty = all events" }
+        watched_only: { type: boolean, description: "client events only for watched clients" }
+        template: { type: string, description: "Go text/template; .Type .Subject .Name .Site .Time .Payload" }
+        configured: { type: boolean, readOnly: true }
+        config: { $ref: "#/components/schemas/ChannelConfig" }
+security:
+  - session: []
+paths:
+  /health:
+    get:
+      summary: Liveness
+      security: []
+      responses: { "200": { description: OK } }
+  /api/v1/auth/status:
+    get:
+      summary: Whether first-run setup is needed, and the current user
+      security: []
+      responses: { "200": { description: OK } }
+  /api/v1/auth/setup:
+    post:
+      summary: Create the admin account (first run only)
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Credentials" } } } }
+      responses: { "200": { description: Logged in }, "409": { description: Already set up } }
+  /api/v1/auth/login:
+    post:
+      summary: Log in
+      security: []
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Credentials" } } } }
+      responses: { "200": { description: Logged in }, "401": { description: Wrong credentials }, "429": { description: Too many failures } }
+  /api/v1/auth/logout:
+    post:
+      summary: Log out
+      security: []
+      responses: { "204": { description: Logged out } }
+  /api/v1/ready:
+    get:
+      summary: Session state and poll age (503 when polls are stale)
+      responses: { "200": { description: Ready }, "503": { description: Not ready } }
+  /api/v1/network:
+    get:
+      summary: Site summary (internet, WAN, node and client counts, load, session)
+      responses: { "200": { description: OK } }
+  /api/v1/nodes:
+    get:
+      summary: Mesh nodes
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Node" } } } } } }
+  /api/v1/nodes/{id}:
+    get:
+      summary: Node detail and history
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: range, in: query, schema: { type: string, enum: [24h, 7d, 30d] } }
+      responses: { "200": { description: OK }, "404": { description: Unknown node } }
+  /api/v1/nodes/{id}/reboot:
+    post:
+      summary: Reboot a node (not verified on hardware yet)
+      security: [ { session: [], csrf: [] } ]
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { "501": { description: Not available yet } }
+  /api/v1/nodes/reboot-all:
+    post:
+      summary: Reboot the whole mesh (not verified on hardware yet)
+      security: [ { session: [], csrf: [] } ]
+      responses: { "501": { description: Not available yet } }
+  /api/v1/clients:
+    get:
+      summary: Clients, online and offline
+      parameters:
+        - { name: online, in: query, schema: { type: boolean } }
+        - { name: node, in: query, schema: { type: string } }
+        - { name: band, in: query, schema: { type: string }, description: "band2_4, band5, band6 or wired" }
+        - { name: network, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string }, description: "matches name, alias, MAC, IP" }
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Client" } } } } } }
+  /api/v1/clients/{mac}:
+    get:
+      summary: Client detail and presence/throughput history
+      parameters:
+        - { name: mac, in: path, required: true, schema: { type: string } }
+        - { name: range, in: query, schema: { type: string, enum: [24h, 7d, 30d] } }
+      responses: { "200": { description: OK }, "404": { description: Unknown client } }
+    patch:
+      summary: Set a client's alias, watch flag and tags (stored in Atlantis, not on the Deco)
+      security: [ { session: [], csrf: [] } ]
+      parameters: [ { name: mac, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                alias: { type: string, maxLength: 64 }
+                watch: { type: boolean }
+                tags: { type: array, maxItems: 20, items: { type: string } }
+      responses: { "200": { description: Updated }, "404": { description: Unknown client } }
+  /api/v1/wifi:
+    get:
+      summary: Wi-Fi bands and networks (no passwords)
+      responses: { "200": { description: OK } }
+    patch:
+      summary: Change the main network's SSID and password on every band
+      description: Every device on the main network disconnects until it reconnects with the new details. Toggling networks (band/enable) answers 501 until verified.
+      security: [ { session: [], csrf: [] } ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [network, ssid, password]
+              properties:
+                network: { type: string, enum: [host] }
+                ssid: { type: string, maxLength: 32 }
+                password: { type: string, minLength: 8, maxLength: 63, writeOnly: true }
+      responses: { "200": { description: Changed and confirmed }, "400": { description: Invalid }, "501": { description: Not available }, "502": { description: Device refused } }
+  /api/v1/firmware:
+    get:
+      summary: Firmware update state per model
+      responses: { "200": { description: OK } }
+  /api/v1/events:
+    get:
+      summary: Events, newest first
+      parameters:
+        - { name: type, in: query, schema: { type: string }, description: "exact type, or a prefix ending in '.' such as client." }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 1000 } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Event" } } } } } }
+  /api/v1/settings:
+    get:
+      summary: Effective configuration (no secrets)
+      responses: { "200": { description: OK } }
+    put:
+      summary: Change settings (configure via YAML/environment for now)
+      security: [ { session: [], csrf: [] } ]
+      responses: { "501": { description: Not available yet } }
+  /api/v1/channels:
+    get:
+      summary: Notification channels (configs are never returned)
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Channel" } } } } } }
+    post:
+      summary: Add a channel
+      security: [ { session: [], csrf: [] } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Channel" } } } }
+      responses: { "201": { description: Created }, "400": { description: Invalid } }
+  /api/v1/channels/test:
+    post:
+      summary: Send a test message with unsaved channel settings
+      security: [ { session: [], csrf: [] } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Channel" } } } }
+      responses: { "200": { description: Sent }, "502": { description: Delivery failed } }
+  /api/v1/channels/{id}:
+    put:
+      summary: Update a channel (omit config to keep the stored one)
+      security: [ { session: [], csrf: [] } ]
+      parameters: [ { name: id, in: path, required: true, schema: { type: integer } } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Channel" } } } }
+      responses: { "200": { description: Updated }, "404": { description: Unknown channel } }
+    delete:
+      summary: Delete a channel
+      security: [ { session: [], csrf: [] } ]
+      parameters: [ { name: id, in: path, required: true, schema: { type: integer } } ]
+      responses: { "204": { description: Deleted }, "404": { description: Unknown channel } }
+  /api/v1/channels/{id}/test:
+    post:
+      summary: Send a test message to a saved channel
+      security: [ { session: [], csrf: [] } ]
+      parameters: [ { name: id, in: path, required: true, schema: { type: integer } } ]
+      responses: { "200": { description: Sent }, "502": { description: Delivery failed } }
+  /api/v1/session:
+    get:
+      summary: Deco session state
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SessionStatus" } } } } }
+  /api/v1/session/logout:
+    post:
+      summary: Release the Deco admin session for a while so the Deco app can be used
+      security: [ { session: [], csrf: [] } ]
+      parameters: [ { name: minutes, in: query, schema: { type: integer, minimum: 1, maximum: 1440, default: 10 } } ]
+      responses: { "200": { description: Released } }
+  /api/v1/session/pause:
+    post:
+      summary: Stop polling and release the Deco until resumed
+      security: [ { session: [], csrf: [] } ]
+      responses: { "200": { description: Paused } }
+  /api/v1/session/resume:
+    post:
+      summary: Resume polling (also after fixing the password)
+      security: [ { session: [], csrf: [] } ]
+      responses: { "200": { description: Resumed } }
+  /api/v1/session/accept-host-key:
+    post:
+      summary: Trust the Deco's current SSH host key / certificate after it changed
+      security: [ { session: [], csrf: [] } ]
+      responses: { "200": { description: Accepted } }
+  /api/v1/audit:
+    get:
+      summary: Audit log of actions
+      responses: { "200": { description: OK } }
+  /api/v1/stream:
+    get:
+      summary: Live updates (server-sent events: snapshot, clients, event, session)
+      responses: { "200": { description: Event stream, content: { text/event-stream: {} } } }
+  /api/v1/debug/raw:
+    get:
+      summary: Redacted raw device reply (only with debug.enabled)
+      parameters:
+        - { name: area, in: query, required: true, schema: { type: string } }
+        - { name: form, in: query, required: true, schema: { type: string } }
+      responses: { "200": { description: OK } }

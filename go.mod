@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/containrrr/shoutrrr v0.8.0
+	github.com/go-chi/chi/v5 v5.5.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
