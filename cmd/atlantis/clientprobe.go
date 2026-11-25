@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"syscall"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -61,6 +62,8 @@ about half a minute. A sanitised record is written to --out for the tests.`,
 	return cmd
 }
 
+// renameRecord is the evidence a pass leaves in testdata. It is written
+// only after a pass and holds no error text, names or MACs.
 type renameRecord struct {
 	Fields []string `json:"fields"` // the client entry's fields (values redacted)
 	Tried  []string `json:"tried"`  // what each test name was: ascii or hebrew
@@ -100,40 +103,26 @@ func clientRenameProbe(ctx context.Context, c *tmpclient.Client, mac string, nam
 		}
 	}()
 	for _, n := range names {
-		kind := "ascii"
-		for _, r := range n {
-			if r >= utf8.RuneSelf {
-				kind = "hebrew"
-				break
-			}
-		}
+		kind := nameKind(n)
 		fmt.Fprintf(o.out, "Renaming the client (%s test name).\n", kind)
 		sent, restored = true, false
 		if err := c.ProbeRenameClient(ctx, mac, n, true); err != nil {
-			rec.Result = "rename failed: " + err.Error()
-			_ = writeRenameRecord(out, rec)
 			return err
 		}
 		if err := sleepCtx(ctx, probeSettle); err != nil {
 			return err
 		}
 		if e, err := c.ClientEntry(ctx, mac); err != nil || b64Plain(e.Str("name")) != n {
-			rec.Result = fmt.Sprintf("%s name did not persist", kind)
-			_ = writeRenameRecord(out, rec)
 			return fmt.Errorf("the %s name did not persist (%v)", kind, err)
 		}
 		fmt.Fprintln(o.out, "Confirmed. Restoring the original name.")
 		if err := c.ProbeRenameClient(ctx, mac, orig, true); err != nil {
-			rec.Result = "restore failed: " + err.Error()
-			_ = writeRenameRecord(out, rec)
 			return err
 		}
 		restored = true
 		rec.Tried = append(rec.Tried, kind)
 	}
 	if e, err := c.ClientEntry(ctx, mac); err != nil || b64Plain(e.Str("name")) != orig {
-		rec.Result = "the original name is not back"
-		_ = writeRenameRecord(out, rec)
 		return fmt.Errorf("the original name is not back (%v)", err)
 	}
 	rec.Result = "pass"
@@ -142,6 +131,24 @@ func clientRenameProbe(ctx context.Context, c *tmpclient.Client, mac string, nam
 	}
 	fmt.Fprintln(o.out, "PASS: renaming works on this Deco and the original name is back.")
 	return nil
+}
+
+// nameKind classifies a test name for the record: "ascii", "hebrew" (has
+// Hebrew letters) or "other".
+func nameKind(n string) string {
+	ascii := true
+	for _, r := range n {
+		if unicode.Is(unicode.Hebrew, r) {
+			return "hebrew"
+		}
+		if r >= utf8.RuneSelf {
+			ascii = false
+		}
+	}
+	if ascii {
+		return "ascii"
+	}
+	return "other"
 }
 
 // trimBytes shortens s to at most n bytes without splitting a character.
