@@ -154,6 +154,9 @@ func (c *Client) RawParams(ctx context.Context, area, form string, params any) (
 	if !ok {
 		return nil, fmt.Errorf("tmpclient: unknown opcode %q", form)
 	}
+	if tmp.IsWrite(op) {
+		return nil, fmt.Errorf("tmpclient: %s changes the device; Raw is read-only", op)
+	}
 	res, err := c.Request(ctx, op, params)
 	if err != nil {
 		return nil, err

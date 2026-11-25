@@ -180,6 +180,11 @@ func (d *Device) execute(op tmp.Opcode, body []byte) ([]byte, byte) {
 	}
 	d.seen = append(d.seen, op)
 	d.requests[op] = append(json.RawMessage(nil), body...)
+	if op == tmp.OpWirelessSet {
+		d.applyWirelessSet(body)
+		b, _ := json.Marshal(map[string]any{"error_code": 0, "result": map[string]any{}})
+		return b, 0
+	}
 	res, ok := d.results[op]
 	if !ok {
 		b, _ := json.Marshal(map[string]any{"error_code": -40101, "msg": "unsupported"})
@@ -243,4 +248,37 @@ func (d *Device) Relay(deviceID string, requestData json.RawMessage) (any, error
 		}
 	}
 	return map[string]any{"err_code": 0}, nil
+}
+
+// applyWirelessSet merges a WIRELESS_SET's params into the WIRELESS_GET
+// result, network by network, as the device does.
+func (d *Device) applyWirelessSet(body []byte) {
+	var req struct {
+		Params map[string]map[string]map[string]any `json:"params"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return
+	}
+	cur, _ := d.results[tmp.OpWirelessGet].(map[string]any)
+	if cur == nil {
+		cur = map[string]any{}
+	}
+	for band, nets := range req.Params {
+		b, _ := cur[band].(map[string]any)
+		if b == nil {
+			b = map[string]any{}
+		}
+		for name, fields := range nets {
+			n, _ := b[name].(map[string]any)
+			if n == nil {
+				n = map[string]any{}
+			}
+			for k, v := range fields {
+				n[k] = v
+			}
+			b[name] = n
+		}
+		cur[band] = b
+	}
+	d.results[tmp.OpWirelessGet] = cur
 }

@@ -84,7 +84,7 @@ func TestDisallowedOpcodeNeverSent(t *testing.T) {
 	d := fakedeco.New()
 	s := open(t, d)
 	defer s.Close()
-	for _, op := range []tmp.Opcode{0x4016, 0x4008, tmp.OpTokenFree} {
+	for _, op := range []tmp.Opcode{0x4016, 0x401D, tmp.OpTokenFree} {
 		_, err := s.Request(context.Background(), op, nil)
 		var na tmp.ErrOpcodeNotAllowed
 		if !errors.As(err, &na) {
@@ -92,7 +92,7 @@ func TestDisallowedOpcodeNeverSent(t *testing.T) {
 		}
 	}
 	for _, op := range d.Seen() {
-		if op == 0x4016 || op == 0x4008 {
+		if op == 0x4016 || op == 0x401D {
 			t.Fatalf("%s reached the device", op)
 		}
 	}

@@ -13,6 +13,12 @@ const (
 	OpCompNegotiate Opcode = 0x4001
 )
 
+// Write opcodes. Each is allowed only through its dedicated, validated
+// client method; Raw and the probes never send them.
+const (
+	OpWirelessSet Opcode = 0x4008
+)
+
 // Read-only business opcodes.
 const (
 	OpWirelessGet              Opcode = 0x4009
@@ -33,6 +39,7 @@ var opNames = map[Opcode]string{
 	OpBlockedListGet: "BLOCKED_LIST_GET", OpFWLatestGet: "FW_LATEST_GET", OpWANInfoGet: "WAN_INFO_GET",
 	OpDeviceSignalLevelListGet: "DEVICE_SIGNAL_LEVEL_LIST_GET",
 	OpDeviceResourceInfoGet:    "DEVICE_RESOURCE_INFO_GET",
+	OpWirelessSet:              "WIRELESS_SET",
 }
 
 func (o Opcode) String() string {
@@ -51,7 +58,16 @@ var allowed = map[Opcode]bool{
 	OpWirelessGet: true, OpDeviceListGet: true, OpClientListGet: true, OpClientListSpeedGet: true,
 	OpBlockedListGet: true, OpFWLatestGet: true, OpWANInfoGet: true,
 	OpDeviceSignalLevelListGet: true, OpDeviceResourceInfoGet: true,
+	// WIRELESS_SET: host-network SSID/password only (tmpclient.SetHostWiFi),
+	// verified on a Deco M5.
+	OpWirelessSet: true,
 }
+
+// writes are the allowed opcodes that change device state.
+var writes = map[Opcode]bool{OpWirelessSet: true}
+
+// IsWrite reports whether op changes device state.
+func IsWrite(op Opcode) bool { return writes[op] }
 
 // Allowed reports whether op may be sent.
 func Allowed(op Opcode) bool { return allowed[op] }
