@@ -61,6 +61,17 @@ func (e RelayError) Error() string {
 	return fmt.Sprintf("%s (err_code %d)", msg, e.Code)
 }
 
+// DeviceError is an error_code from the Deco's cloud agent: the device
+// received the request and rejected it.
+type DeviceError struct{ Code int }
+
+func (e DeviceError) Error() string {
+	if e.Code == -1002 {
+		return "the Deco does not support this relay request (error_code -1002, unknown method)"
+	}
+	return fmt.Sprintf("the Deco rejected the relay request (error_code %d)", e.Code)
+}
+
 const (
 	codeNotConnected = 4
 	// The app rebuilds the client with a new token and retries once on a
@@ -98,9 +109,12 @@ type Conn struct {
 }
 
 type response struct {
-	ErrCode int    `json:"err_code"`
-	SN      int64  `json:"sn"`
-	RawData string `json:"raw_data"`
+	ErrCode int `json:"err_code"`
+	// ErrorCode is set instead of err_code when the Deco's cloud agent
+	// rejects the request itself (JSON-RPC style, e.g. -1002 unknown method).
+	ErrorCode int    `json:"error_code"`
+	SN        int64  `json:"sn"`
+	RawData   string `json:"raw_data"`
 }
 
 // Dial sends CONNECT and starts the transfer loop. As in the app, the
@@ -160,6 +174,9 @@ func (c *Conn) send(ctx context.Context, req map[string]any) (*response, error) 
 	var r response
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, fmt.Errorf("malformed relay response: %w", err)
+	}
+	if r.ErrorCode != 0 {
+		return &r, DeviceError{Code: r.ErrorCode}
 	}
 	if r.ErrCode != 0 && r.ErrCode != 1 {
 		return &r, RelayError{Code: r.ErrCode}

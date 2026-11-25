@@ -227,3 +227,20 @@ func TestGivesUpAfterAttempts(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+type rejectingRelay struct{}
+
+func (rejectingRelay) Token() string { return "acct" }
+func (rejectingRelay) Passthrough(context.Context, string, string, any) (json.RawMessage, error) {
+	return json.RawMessage(`{"error_code":-1002}`), nil
+}
+
+// Seen live: a Deco whose cloud agent does not know CONNECT answers with
+// error_code, not err_code. That must be a failure, not a success.
+func TestDeviceErrorCodeIsNotSuccess(t *testing.T) {
+	_, err := Dial(context.Background(), rejectingRelay{}, "https://relay.example", "dev-1", t.Logf)
+	var de DeviceError
+	if !errors.As(err, &de) || de.Code != -1002 || !strings.Contains(err.Error(), "unknown method") {
+		t.Fatalf("got %v", err)
+	}
+}
