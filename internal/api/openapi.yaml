@@ -14,6 +14,10 @@ info:
     **Metrics.** `/metrics` (Prometheus) needs `Authorization: Bearer <metrics.token>`,
     or a logged-in session when no token is configured. It is never public.
 
+    **The Deco.** Atlantis can start without one; add it with `POST /api/v1/deco`.
+    Until then, every endpoint that reads the mesh answers `409` with
+    `{"code": "no_deco"}`.
+
     **Writes.** Only actions verified on a real Deco are performed: changing the
     main Wi-Fi SSID and password. Reboot and Wi-Fi on/off answer `501` until
     they are verified. Secrets (passwords, channel URLs and tokens) are
@@ -34,6 +38,29 @@ components:
     Error:
       type: object
       properties: { error: { type: string } }
+    DecoStatus:
+      type: object
+      properties:
+        configured: { type: boolean, description: A Deco is stored }
+        running: { type: boolean, description: Atlantis is connected and polling it }
+        needs_password: { type: boolean, description: Stored without a password; add it with PUT /api/v1/deco }
+        host: { type: string }
+        port: { type: integer, description: SSH port; 0 = discovered }
+        transport: { type: string, enum: [ssh, luci] }
+        email: { type: string, description: TP-Link ID }
+        host_key: { type: string, description: Pinned SSH host key fingerprint }
+        discovery:
+          type: object
+          properties: { model: { type: string }, role: { type: string }, port: { type: integer } }
+    DecoConnect:
+      type: object
+      required: [host]
+      properties:
+        host: { type: string, description: IP address of the main Deco }
+        port: { type: integer, minimum: 0, maximum: 65535, description: SSH port; 0 = discover }
+        transport: { type: string, enum: [ssh, luci], default: ssh }
+        email: { type: string, description: TP-Link ID (ssh) }
+        password: { type: string, writeOnly: true, description: TP-Link ID password; on PUT, empty keeps the stored one }
     Credentials:
       type: object
       required: [username, password]
@@ -333,9 +360,42 @@ paths:
     get:
       summary: Audit log of actions
       responses: { "200": { description: OK } }
+  /api/v1/deco:
+    get:
+      summary: The Deco Atlantis manages, if any (the password is never returned)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DecoStatus" } } } } }
+    post:
+      summary: Add the main Deco. Atlantis logs in and reads the node list first, and stores the settings only if that works.
+      security: [ { session: [], csrf: [] } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DecoConnect" } } } }
+      responses:
+        "200": { description: Connected, content: { application/json: { schema: { $ref: "#/components/schemas/DecoStatus" } } } }
+        "400": { description: Invalid settings }
+        "409": { description: A Deco is already connected }
+        "422": { description: Wrong password, TLS-only model, a satellite instead of the main Deco, or another admin is signed in }
+        "429": { description: Too many rejected passwords; wait so the TP-Link ID is not locked }
+        "502": { description: The Deco could not be reached }
+    put:
+      summary: Change the Deco's address, account or password. History is kept.
+      security: [ { session: [], csrf: [] } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/DecoConnect" } } } }
+      responses:
+        "200": { description: Connected, content: { application/json: { schema: { $ref: "#/components/schemas/DecoStatus" } } } }
+        "400": { description: Invalid settings }
+        "409": { description: No Deco to change }
+        "422": { description: Wrong password, TLS-only model, a satellite, or another admin is signed in }
+        "429": { description: Too many rejected passwords }
+        "502": { description: The Deco could not be reached }
+    delete:
+      summary: Disconnect and delete the Deco with its nodes, clients, history and events
+      security: [ { session: [], csrf: [] } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [confirm], properties: { confirm: { type: string, enum: [REMOVE] } } } } }
+      responses: { "204": { description: Removed }, "400": { description: Not confirmed }, "409": { description: No Deco } }
   /api/v1/stream:
     get:
-      summary: Live updates (server-sent events: snapshot, clients, event, session)
+      summary: "Live updates (server-sent events: snapshot, clients, event, session, deco)"
       responses: { "200": { description: Event stream, content: { text/event-stream: {} } } }
   /api/v1/debug/raw:
     get:

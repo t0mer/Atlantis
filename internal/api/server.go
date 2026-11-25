@@ -108,6 +108,10 @@ func (s *Server) Handler() http.Handler {
 				r.Post("/channels/{id}/test", s.testChannel)
 				r.Post("/channels/test", s.testDraftChannel)
 				r.Get("/audit", s.auditLog)
+				r.Get("/deco", s.decoStatus)
+				r.Post("/deco", s.connectDeco)
+				r.Put("/deco", s.connectDeco)
+				r.Delete("/deco", s.removeDeco)
 			})
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireAuth, s.needDeco)
