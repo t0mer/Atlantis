@@ -50,9 +50,9 @@ func TestOpenBoxUsesAKeyFileNextToTheData(t *testing.T) {
 		t.Fatal("a new key was created for a database with encrypted data")
 	}
 
-	// The environment wins.
+	// A key that does not open the stored passwords is refused.
 	cfg.SecretKey = secret.NewKey()
-	if _, _, err := openBox(ctx, cfg, st, log); err != nil {
-		t.Fatal(err)
+	if _, _, err := openBox(ctx, cfg, st, log); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("a wrong key must be refused: %v", err)
 	}
 }

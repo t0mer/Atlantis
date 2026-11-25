@@ -104,6 +104,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// abandoned notification send cannot hang for ever.
 	http.DefaultClient.Timeout = 30 * time.Second
 
+	cfg.Store.Path = legacyStorePath(cfg.Store.Path, log)
 	st, err := store.Open(ctx, cfg.Store.Path)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", cfg.Store.Path, err)
@@ -240,13 +241,32 @@ func seedDeco(ctx context.Context, cfg *config.Config, st *store.Store, box *sec
 // openBox returns the box for stored secrets. ATLANTIS_SECRET_KEY wins;
 // otherwise the key lives in secret.key next to the database and is
 // created on first start. It is never created for a database that already
-// holds encrypted data: that data needs the key it was sealed with.
-func openBox(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) (box *secret.Box, keySource string, err error) {
+// holds encrypted data, and whichever key is used must open that data.
+func openBox(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) (*secret.Box, string, error) {
+	box, source, err := chooseKey(ctx, cfg, st, log)
+	if err != nil {
+		return nil, "", err
+	}
+	sample, err := st.SealedSample(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := box.Open(sample); err != nil {
+		return nil, "", fmt.Errorf("the encryption key from %s does not match the passwords stored in %s; "+
+			"start Atlantis with the key this database was set up with", source, cfg.Store.Path)
+	}
+	return box, source, nil
+}
+
+func chooseKey(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) (*secret.Box, string, error) {
 	if cfg.SecretKey != "" {
-		box, err = secret.New(cfg.SecretKey)
+		box, err := secret.New(cfg.SecretKey)
 		return box, "environment (ATLANTIS_SECRET_KEY)", err
 	}
 	path := filepath.Join(filepath.Dir(cfg.Store.Path), secret.KeyFileName)
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
 	sealed, err := st.HasSealed(ctx)
 	if err != nil {
 		return nil, "", err
@@ -259,14 +279,32 @@ func openBox(ctx context.Context, cfg *config.Config, st *store.Store, log *slog
 	if err != nil {
 		return nil, "", err
 	}
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
 	if created {
 		log.Warn("created a new secret key; back it up together with the database", "path", path)
 	} else {
 		log.Info("using the secret key file", "path", path)
 	}
-	box, err = secret.New(key)
+	box, err := secret.New(key)
 	return box, path, err
+}
+
+// oldDefaultStore was the default database path before it became relative
+// to the working directory.
+const oldDefaultStore = "/data/atlantis.db"
+
+// legacyStorePath keeps an install that relied on the old default working:
+// with the new default and no database in the working directory, an
+// existing database at the old default path is used.
+func legacyStorePath(path string, log *slog.Logger) string {
+	if path != "atlantis.db" {
+		return path
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	if _, err := os.Stat(oldDefaultStore); err == nil {
+		log.Info("using the existing database at the old default path; set ATLANTIS_STORE_PATH to choose", "path", oldDefaultStore)
+		return oldDefaultStore
+	}
+	return path
 }

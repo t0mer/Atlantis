@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -115,21 +116,41 @@ func LoadKeyFile(path string, create bool) (key string, created bool, err error)
 		return "", false, fmt.Errorf("%w: %s", ErrNoKeyFile, path)
 	}
 	key = NewKey()
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, fs.ErrExist) { // another start won the race: use its key
-		return LoadKeyFile(path, false)
-	}
+	// Write a temporary file, flush it, then link it into place: the link
+	// fails if another start got there first (its key is then used), and a
+	// reader never sees a half-written key. The directory is flushed too,
+	// so the key survives a power cut as durably as the database does.
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".secret.key.*")
 	if err != nil {
+		return "", false, err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
 		return "", false, err
 	}
 	if _, err := f.WriteString(key + "\n"); err != nil {
 		f.Close()
-		os.Remove(path)
+		return "", false, err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
 		return "", false, err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(path)
 		return "", false, err
+	}
+	if err := os.Link(tmp, path); err != nil {
+		if errors.Is(err, fs.ErrExist) { // another start won: use its key
+			return LoadKeyFile(path, false)
+		}
+		return "", false, err
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
 	}
 	return key, true, nil
 }
