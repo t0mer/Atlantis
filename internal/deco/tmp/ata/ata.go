@@ -35,6 +35,7 @@ const (
 	pollBackoff    = 2.0
 	pollJitter     = 0.25
 	requestTimeout = 30 * time.Second
+	drainTimeout   = 5 * time.Second
 	maxReadBuffer  = 16 << 20
 )
 
@@ -64,6 +65,7 @@ type Conn struct {
 	in      []byte    // bytes received, not yet read
 	err     error     // terminal error
 	closed  bool
+	drain   bool // Close is flushing queued bytes before DISCONNECT
 	sn      int64
 	kick    chan struct{}
 	done    chan struct{}
@@ -167,16 +169,25 @@ func (c *Conn) termErr() error {
 	return ErrClosed
 }
 
-// Close stops the loop and sends DISCONNECT.
+// Close flushes queued bytes (such as a TMP bye), stops the loop and sends
+// DISCONNECT.
 func (c *Conn) Close() error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
 		return nil
 	}
-	c.closed = true
+	c.closed, c.drain = true, true
 	c.cond.Broadcast()
 	c.mu.Unlock()
+	select {
+	case c.kick <- struct{}{}:
+	default:
+	}
+	select {
+	case <-c.stopped: // flushed, or the loop had already failed
+	case <-time.After(drainTimeout):
+	}
 	close(c.done)
 	<-c.stopped
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
@@ -206,7 +217,7 @@ func (c *Conn) due() (bool, time.Duration) {
 	if len(c.out) == 0 {
 		return false, -1
 	}
-	if base64.StdEncoding.EncodedLen(len(c.out)) >= maxBatchBase64 {
+	if c.drain || base64.StdEncoding.EncodedLen(len(c.out)) >= maxBatchBase64 {
 		return true, 0
 	}
 	wait := flushDelay - time.Since(c.outAt)
@@ -219,6 +230,9 @@ func (c *Conn) loop() {
 	defer close(c.stopped)
 	poll := minPoll
 	for {
+		if c.drained() {
+			return
+		}
 		ready, wait := c.due()
 		if !ready {
 			d := jitter(poll)
@@ -283,6 +297,13 @@ func (c *Conn) loop() {
 			c.mu.Unlock()
 		}
 	}
+}
+
+// drained reports that Close is waiting and nothing is left to send.
+func (c *Conn) drained() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.drain && len(c.out) == 0
 }
 
 func (c *Conn) fail(err error) {

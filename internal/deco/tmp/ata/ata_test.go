@@ -153,3 +153,22 @@ func TestCloseUnblocksRead(t *testing.T) {
 		t.Fatalf("want ErrClosed, got %v", err)
 	}
 }
+
+// A frame written just before Close (the TMP bye) must reach the device
+// before DISCONNECT.
+func TestCloseFlushesQueuedBytes(t *testing.T) {
+	r := &echoRelay{}
+	c := dial(t, r)
+	c.Write([]byte("bye!"))
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if string(r.pending) != "BYE!" {
+		t.Fatalf("queued bytes were dropped: device saw %q", r.pending)
+	}
+	if r.methods[len(r.methods)-1] != "DISCONNECT" {
+		t.Fatalf("lifecycle: %v", r.methods)
+	}
+}
