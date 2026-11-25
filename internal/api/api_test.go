@@ -150,6 +150,14 @@ func TestAuthFlow(t *testing.T) {
 	if code, _, _ := e.do(t, "POST", "/api/v1/auth/setup", `{"username":"admin","password":"short"}`, false); code != 400 {
 		t.Fatal("weak password accepted")
 	}
+	// A cross-site form can only send text/plain; it must not reach setup.
+	req, _ := http.NewRequest("POST", e.srv.URL+"/api/v1/auth/setup", strings.NewReader(`{"username":"evil","password":"aaaaaaaaaa="}`))
+	req.Header.Set("Content-Type", "text/plain")
+	if resp, err := e.cl.Do(req); err != nil || resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("text/plain setup: %v %v", resp, err)
+	} else {
+		resp.Body.Close()
+	}
 	e.login(t)
 	if code, _, _ := e.do(t, "POST", "/api/v1/auth/setup", `{"username":"evil","password":"another long one"}`, false); code != 409 {
 		t.Fatal("setup replayed")
