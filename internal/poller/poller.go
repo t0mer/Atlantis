@@ -131,6 +131,12 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
+// sessionFatal reports errors that mean the session itself is unusable.
+func sessionFatal(err error) bool {
+	return errors.Is(err, deco.ErrWrongPassword) || errors.Is(err, deco.ErrAuthFailed) || errors.Is(err, deco.ErrOtherAdmin) ||
+		errors.Is(err, deco.ErrCertChanged) || errors.Is(err, deco.ErrCertUnknown) || errors.Is(err, context.Canceled)
+}
+
 // reason classifies a loop error for the metrics label.
 func reason(err error) string {
 	switch {
@@ -215,26 +221,48 @@ func (p *Poller) metricClients(ctx context.Context, list []deco.WifiClient) []me
 func (p *Poller) Slow(ctx context.Context) {
 	start := p.now()
 	var s Snapshot
+	prev := p.Snapshot()
 	err := p.sess.Do(ctx, func(ctx context.Context, c deco.Client) error {
+		// Only the node list is required. The other reads are optional: a
+		// Deco that refuses one (or a read that fails) keeps the previous
+		// value instead of blanking the whole poll. Session-level failures
+		// still end the poll, so the session manager sees them.
 		var err error
 		if s.Nodes, err = c.Devices(ctx); err != nil {
 			return err
 		}
-		if s.Wireless, err = c.Wireless(ctx); err != nil && !errors.Is(err, deco.ErrUnsupported) {
+		optional := func(name string, err error) error {
+			if err == nil || errors.Is(err, deco.ErrUnsupported) {
+				return nil
+			}
+			if sessionFatal(err) {
+				return err
+			}
+			p.log.Warn("optional read failed", "read", name, "err", err)
+			return nil
+		}
+		w, err := c.Wireless(ctx)
+		if s.Wireless = w; err != nil {
+			s.Wireless = prev.Wireless
+		}
+		if err := optional("wireless", err); err != nil {
 			return err
 		}
-		if s.Firmware, err = c.Firmware(ctx); err != nil && !errors.Is(err, deco.ErrUnsupported) {
+		fw, err := c.Firmware(ctx)
+		if s.Firmware = fw; err != nil {
+			s.Firmware = prev.Firmware
+		}
+		if err := optional("firmware", err); err != nil {
 			return err
 		}
 		s.WAN, err = c.WAN(ctx)
-		if s.WANSupported = err == nil; err != nil && !errors.Is(err, deco.ErrUnsupported) {
+		s.WANSupported = err == nil
+		if err := optional("wan", err); err != nil {
 			return err
 		}
 		s.Performance, err = c.Performance(ctx)
-		if s.PerformanceSupported = err == nil; err != nil && !errors.Is(err, deco.ErrUnsupported) {
-			return err
-		}
-		return nil
+		s.PerformanceSupported = err == nil
+		return optional("performance", err)
 	})
 	defer func() { p.finish("slow", start, err) }()
 	if err != nil {

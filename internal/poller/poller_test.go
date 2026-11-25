@@ -3,6 +3,7 @@ package poller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -158,5 +159,26 @@ func TestRunStopsWithContext(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not stop")
+	}
+}
+
+type flakyWireless struct{ *fakeDeco }
+
+func (flakyWireless) Wireless(context.Context) (*deco.WirelessConfig, error) {
+	return nil, errors.New("tmp: WIRELESS_GET returned error_code -40101")
+}
+
+// A failing optional read must not blank the poll.
+func TestOptionalReadFailureKeepsNodes(t *testing.T) {
+	f := &fakeDeco{nodes: []deco.Device{{ID: "m", Master: true, Online: true}}}
+	p, st, _, _, sess := setup(t, f)
+	p.sess = session.New(flakyWireless{f}, nil)
+	_ = sess
+	p.Slow(context.Background())
+	if nodes, _ := st.Nodes(context.Background(), 1); len(nodes) != 1 {
+		t.Fatal("nodes dropped because Wi-Fi failed")
+	}
+	if p.Snapshot().Wireless != nil {
+		t.Fatal("no previous Wi-Fi to keep")
 	}
 }

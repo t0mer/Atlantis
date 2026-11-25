@@ -52,7 +52,11 @@ func New() *Device {
 		replies:  map[uint16][]byte{},
 		requests: map[tmp.Opcode]json.RawMessage{},
 		results: map[tmp.Opcode]any{
-			tmp.OpCompNegotiate: map[string]any{"component_list": []any{}, "operation_mode": "Router"},
+			tmp.OpCompNegotiate:      map[string]any{"component_list": []any{}, "operation_mode": "Router"},
+			tmp.OpClientListGet:      map[string]any{"client_list": []any{}},
+			tmp.OpClientListSpeedGet: map[string]any{"client_list_speed": []any{}},
+			tmp.OpWirelessGet: map[string]any{"band2_4": map[string]any{
+				"host": map[string]any{"enable": true, "ssid": "SG9tZQ==", "password": "c2VjcmV0"}}},
 			tmp.OpDeviceListGet: map[string]any{"device_list": []any{map[string]any{
 				"device_id": "dev-1", "mac": "AA-BB-CC-DD-EE-01", "nickname": "custom", "custom_nickname": "TGl2aW5n", "role": "master",
 			}}},
