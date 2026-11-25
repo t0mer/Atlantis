@@ -15,8 +15,8 @@ async function signIn(page: Page) {
   await expect(page.getByText(/^Internet (is|status)/)).toBeVisible();
 }
 
-async function shot(page: Page, name: string) {
-  if (shots) await page.screenshot({ path: `${shots}/${name}.png`, fullPage: true });
+async function shot(page: Page, name: string, fullPage = true) {
+  if (shots) await page.screenshot({ path: `${shots}/${name}.png`, fullPage });
 }
 
 test.describe.configure({ mode: "serial" });
@@ -64,10 +64,10 @@ test("rename and watch a client", async ({ page }) => {
   await signIn(page);
   await page.goto("/clients");
   await page.locator("tbody tr a").first().click();
-  await page.getByLabel("Name in Atlantis").fill("Test alias");
+  await page.getByLabel("Name in Atlantis").fill("Noa's tablet");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved")).toBeVisible();
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Test alias");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Noa's tablet");
   await page.getByRole("switch", { name: "Watch this device" }).click();
   await expect(page.getByText("Now watching")).toBeVisible();
 });
@@ -104,10 +104,10 @@ test("dark mode and phone layout", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await signIn(page);
   await expect(page.getByRole("navigation", { name: "Main" })).toBeVisible();
-  await shot(page, "mobile-overview");
+  await shot(page, "mobile-overview", false); // the bottom bar is fixed
   await page.getByRole("button", { name: "Dark mode" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await shot(page, "mobile-dark");
+  await shot(page, "mobile-dark", false);
   await page.setViewportSize({ width: 1280, height: 860 });
   await page.goto("/");
   await expect(page.getByText(/^Internet (is|status)/)).toBeVisible();

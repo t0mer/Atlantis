@@ -13,8 +13,15 @@ pids=()
 cleanup() { kill "${pids[@]}" 2>/dev/null || true; rm -rf "$DIR"; }
 trap cleanup EXIT INT TERM
 
-bin/atlantis-fake -listen "127.0.0.1:$FAKE_PORT" -churn 20s &
+# SEED=1 starts with a day of history (for README screenshots).
+seed=()
+[ -n "${SEED:-}" ] && seed=(-seed-history "$DIR/atlantis.db")
+bin/atlantis-fake -listen "127.0.0.1:$FAKE_PORT" -churn "${FAKE_CHURN:-20s}" "${seed[@]}" &
 pids+=($!)
+for _ in $(seq 100); do # the fake listens once any seeding is done
+  (exec 3<>"/dev/tcp/127.0.0.1/$FAKE_PORT") 2>/dev/null && break
+  sleep 0.1
+done
 
 ATLANTIS_SECRET_KEY="$(bin/atlantis keygen)" \
 ATLANTIS_SERVER_LISTEN="127.0.0.1:$API_PORT" \

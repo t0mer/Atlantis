@@ -104,7 +104,18 @@ func publish(d *fakedeco.Device) {
 func main() {
 	addr := flag.String("listen", "127.0.0.1:0", "address for the fake Deco's SSH service")
 	churn := flag.Duration("churn", 40*time.Second, "how often a client comes or goes (0 = never)")
+	seed := flag.String("seed-history", "", "write a day of history for this mesh into the Atlantis database at this path, then serve")
 	flag.Parse()
+
+	if *seed != "" {
+		if err := seedHistory(*seed, 24*time.Hour); err != nil {
+			log.Fatal(err)
+		}
+		now := time.Now()
+		for _, c := range clients { // start where the history ends
+			c.online = home(c, now, now)
+		}
+	}
 
 	srv, err := fakessh.NewAt(*addr, sshconn.Username(email, false, false), password)
 	if err != nil {
