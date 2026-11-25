@@ -9,7 +9,16 @@ export default defineConfig({
     outDir: "../internal/web/dist",
     emptyOutDir: false, // keep the tracked placeholder.html
     sourcemap: false,
-    rollupOptions: { output: { manualChunks: { charts: ["recharts"], vendor: ["react", "react-dom", "react-router-dom", "@tanstack/react-query"] } } },
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("/node_modules/")) return undefined;
+          if (/\/node_modules\/(recharts|d3-[^/]+|victory-vendor)\//.test(id)) return "charts";
+          if (/\/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler|@tanstack\/react-query)\//.test(id)) return "vendor";
+          return undefined;
+        },
+      },
+    },
   },
   server: {
     proxy: {
