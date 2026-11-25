@@ -32,7 +32,10 @@ const RawArea = "tmp"
 // Deprecated: every typed read is implemented.
 var ErrNotImplemented = errors.New("tmpclient: not implemented")
 
-var _ deco.Client = (*Client)(nil)
+var (
+	_ deco.Client     = (*Client)(nil)
+	_ deco.WiFiWriter = (*Client)(nil)
+)
 
 // Client is a deco.Client for one Deco network. It is safe for concurrent
 // use; requests are serialised by the session.

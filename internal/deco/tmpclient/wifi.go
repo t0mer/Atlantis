@@ -13,17 +13,12 @@ import (
 	"github.com/t0mer/atlantis/internal/deco/tmp"
 )
 
-// HostWiFiChange describes a main-network SSID/password change.
-type HostWiFiChange struct {
-	Bands []string // bands that were changed
-}
-
 // SetHostWiFi sets the main (host) network's SSID and password on every
 // known band that has one, keeping each band's other host settings as the
 // device reports them, then reads the settings back to confirm (the app
 // sends only the changed networks: MeshWirelessRepository H0/I0). Every
 // client on the main network is disconnected until it reconnects.
-func (c *Client) SetHostWiFi(ctx context.Context, ssid, password string) (*HostWiFiChange, error) {
+func (c *Client) SetHostWiFi(ctx context.Context, ssid, password string) ([]string, error) {
 	if err := validateHostWiFi(ssid, password); err != nil {
 		return nil, err
 	}
@@ -71,7 +66,7 @@ func (c *Client) SetHostWiFi(ctx context.Context, ssid, password string) (*HostW
 		}
 	}
 	sort.Strings(changed)
-	return &HostWiFiChange{Bands: changed}, nil
+	return changed, nil
 }
 
 // validateHostWiFi applies WPA2 limits: SSID 1-32 bytes of printable text,

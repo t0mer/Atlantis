@@ -45,8 +45,8 @@ func TestSetHostWiFiChangesEveryBandAndKeepsOtherSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(ch.Bands, ",") != "band2_4,band5_1" {
-		t.Fatalf("bands %v", ch.Bands)
+	if strings.Join(ch, ",") != "band2_4,band5_1" {
+		t.Fatalf("bands %v", ch)
 	}
 	var sent struct {
 		Params map[string]map[string]map[string]any `json:"params"`
@@ -94,8 +94,8 @@ func TestSetHostWiFiToleratesOddReadBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a successful write was reported as failed: %v", err)
 	}
-	if len(ch.Bands) != 1 || ch.Bands[0] != "band2_4" {
-		t.Fatalf("%v", ch.Bands)
+	if len(ch) != 1 || ch[0] != "band2_4" {
+		t.Fatalf("%v", ch)
 	}
 	var sent struct {
 		Params map[string]any `json:"params"`

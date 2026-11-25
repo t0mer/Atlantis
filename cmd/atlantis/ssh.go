@@ -250,7 +250,7 @@ network disconnects until it reconnects with the new details.`,
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(o.out, "Main Wi-Fi is now %q on %s (confirmed by reading it back).\n", ssid, strings.Join(ch.Bands, ", "))
+			fmt.Fprintf(o.out, "Main Wi-Fi is now %q on %s (confirmed by reading it back).\n", ssid, strings.Join(ch, ", "))
 			return nil
 		},
 	}

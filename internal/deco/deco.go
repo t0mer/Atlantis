@@ -173,6 +173,12 @@ type Client interface {
 	Raw(ctx context.Context, area, form string) (json.RawMessage, error)
 }
 
+// WiFiWriter is implemented by transports that can change the main Wi-Fi
+// network (verified on hardware). SetHostWiFi returns the changed bands.
+type WiFiWriter interface {
+	SetHostWiFi(ctx context.Context, ssid, password string) ([]string, error)
+}
+
 // NormalizeBand maps the device-list/client naming ("band5") to the
 // WIRELESS naming ("band5_1"); other names pass through.
 func NormalizeBand(b string) string {
