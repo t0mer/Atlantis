@@ -93,7 +93,9 @@ type settingsBody struct {
 }
 
 // putSettings changes any of the sections. Everything is checked before
-// anything is saved; the UI settings are saved in one transaction.
+// anything is saved; the UI settings are saved in one transaction. Refresh
+// times are saved separately first, so a storage failure on the rest can
+// leave them applied (the UI never sends both together).
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var b settingsBody
 	if !readJSON(w, r, &b) {

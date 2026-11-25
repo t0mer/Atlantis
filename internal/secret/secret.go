@@ -146,11 +146,37 @@ func LoadKeyFile(path string, create bool) (key string, created bool, err error)
 		if errors.Is(err, fs.ErrExist) { // another start won: use its key
 			return LoadKeyFile(path, false)
 		}
-		return "", false, err
+		// No hard links here (some network shares, FUSE, FAT): create the
+		// file exclusively instead.
+		if err := writeExclusive(path, key); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return LoadKeyFile(path, false)
+			}
+			return "", false, err
+		}
 	}
 	if d, err := os.Open(dir); err == nil {
 		_ = d.Sync()
 		d.Close()
 	}
 	return key, true, nil
+}
+
+// writeExclusive creates path (failing if it exists) with the key, flushed.
+func writeExclusive(path, key string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(key + "\n")
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+	}
+	return err
 }

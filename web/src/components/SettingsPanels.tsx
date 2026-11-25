@@ -289,7 +289,7 @@ export function AdvancedPanel({ s }: { s: Settings }) {
       }}
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Public address" hint="How you open Atlantis, if through a reverse proxy. An https:// address keeps the sign-in cookie on HTTPS only.">
+        <Field label="Public address" hint="How you open Atlantis, if through a reverse proxy. With an https:// address, sign-ins over HTTPS get a Secure cookie; the proxy must send X-Forwarded-Proto: https.">
           <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://atlantis.example.com" autoComplete="off" />
         </Field>
         <Field label="Log level">
