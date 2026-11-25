@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -193,7 +194,7 @@ func TestSetNetworkRefusesUnverifiedWrites(t *testing.T) {
 	d.SetResult(tmp.OpWirelessGet, m5Wireless(t))
 	c := newClient(t, d)
 	for _, p := range []deco.WirelessPatch{
-		{Network: "guest", Enable: ptr(true)},
+		{Network: "iot", Enable: ptr(true)},
 		{Network: "iot", SSID: ptr("x-iot")},
 		{Network: "host", Hidden: ptr(true)},
 		{Network: "host", SSID: ptr("ok"), Encryption: ptr("wpa3")},
@@ -205,7 +206,7 @@ func TestSetNetworkRefusesUnverifiedWrites(t *testing.T) {
 	if d.Request(tmp.OpWirelessSet) != nil {
 		t.Fatal("an unverified write was sent")
 	}
-	if ed := c.Editable(); len(ed) != 1 || len(ed["host"]) != 2 {
+	if ed := c.Editable(); len(ed["host"]) != 2 || len(ed["iot"]) != 0 {
 		t.Fatalf("editable %v", ed)
 	}
 }
@@ -269,5 +270,41 @@ func TestPatchValidation(t *testing.T) {
 	}
 	if d.Request(tmp.OpWirelessSet) != nil {
 		t.Fatal("an invalid write was sent")
+	}
+}
+
+// Every verified write must be backed by a passing hardware probe record.
+func TestVerifiedWritesHaveEvidence(t *testing.T) {
+	files, _ := filepath.Glob("testdata/m5/wifi_probe_*.json")
+	proven := map[string]bool{"host/" + deco.FieldSSID: true, "host/" + deco.FieldPassword: true} // via ssh set-wifi
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		var rec struct {
+			Network string `json:"network"`
+			Result  string `json:"result"`
+			Change  struct {
+				Patch []string `json:"patch"`
+			} `json:"change"`
+			Restore struct {
+				Patch []string `json:"patch"`
+			} `json:"restore"`
+		}
+		if err := json.Unmarshal(b, &rec); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		if rec.Result != "pass" {
+			continue
+		}
+		for _, fl := range append(rec.Change.Patch, rec.Restore.Patch...) {
+			proven[rec.Network+"/"+fl] = true
+		}
+	}
+	c := newClient(t, fakedeco.New())
+	for net, fields := range c.Editable() {
+		for _, f := range fields {
+			if !proven[net+"/"+f] {
+				t.Errorf("%s %s is marked verified but no passing probe record shows it", net, f)
+			}
+		}
 	}
 }

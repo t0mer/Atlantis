@@ -17,8 +17,13 @@ import (
 // verifiedWrites are the Wi-Fi changes proven on a real Deco (an M5) with
 // `atlantis ssh wifi-probe`; SetNetwork refuses anything else. Add an entry
 // only after a probe of that exact network and field passes on hardware.
+// Each entry is backed by a passing record in testdata/m5 (wifi_probe_*.json;
+// TestVerifiedWritesHaveEvidence checks this), except the main network's
+// SSID and password, verified with `atlantis ssh set-wifi` before the probe
+// existed.
 var verifiedWrites = map[string][]string{
-	"host": {deco.FieldSSID, deco.FieldPassword},
+	"host":  {deco.FieldSSID, deco.FieldPassword},
+	"guest": {deco.FieldEnable, deco.FieldSSID, deco.FieldPassword, deco.FieldEncryption},
 }
 
 // Editable reports the verified fields per network.

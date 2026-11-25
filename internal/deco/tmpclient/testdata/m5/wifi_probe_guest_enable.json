@@ -1,0 +1,111 @@
+{
+  "network": "guest",
+  "field": "enable",
+  "before": {
+    "band2_4": {
+      "access_duration": "14400",
+      "bandwidth_limit": {
+        "downstream_bandwidth": 102400,
+        "upstream_bandwidth": 102400,
+        "enable": false
+      },
+      "enable": false,
+      "encryption_mode": "none",
+      "host_isolation": true,
+      "password": "[redacted]",
+      "ssid": "[redacted]"
+    },
+    "band5_1": {
+      "access_duration": "14400",
+      "bandwidth_limit": {
+        "downstream_bandwidth": 102400,
+        "upstream_bandwidth": 102400,
+        "enable": false
+      },
+      "enable": false,
+      "encryption_mode": "none",
+      "host_isolation": true,
+      "password": "[redacted]",
+      "ssid": "[redacted]"
+    }
+  },
+  "change": {
+    "patch": [
+      "enable"
+    ],
+    "bands": [
+      "band2_4",
+      "band5_1"
+    ],
+    "after": {
+      "band2_4": {
+        "access_duration": "14400",
+        "bandwidth_limit": {
+          "downstream_bandwidth": "102400",
+          "upstream_bandwidth": "102400",
+          "enable": false
+        },
+        "enable": true,
+        "encryption_mode": "none",
+        "host_isolation": true,
+        "password": "[redacted]",
+        "remain_time": 14388,
+        "ssid": "[redacted]"
+      },
+      "band5_1": {
+        "access_duration": "14400",
+        "bandwidth_limit": {
+          "downstream_bandwidth": "102400",
+          "upstream_bandwidth": "102400",
+          "enable": false
+        },
+        "enable": true,
+        "encryption_mode": "none",
+        "host_isolation": true,
+        "password": "[redacted]",
+        "remain_time": 14388,
+        "ssid": "[redacted]"
+      }
+    }
+  },
+  "restore": {
+    "patch": [
+      "enable"
+    ],
+    "bands": [
+      "band2_4",
+      "band5_1"
+    ],
+    "after": {
+      "band2_4": {
+        "access_duration": "14400",
+        "bandwidth_limit": {
+          "downstream_bandwidth": "102400",
+          "upstream_bandwidth": "102400",
+          "enable": false
+        },
+        "enable": false,
+        "encryption_mode": "none",
+        "host_isolation": true,
+        "password": "[redacted]",
+        "remain_time": 14393,
+        "ssid": "[redacted]"
+      },
+      "band5_1": {
+        "access_duration": "14400",
+        "bandwidth_limit": {
+          "downstream_bandwidth": "102400",
+          "upstream_bandwidth": "102400",
+          "enable": false
+        },
+        "enable": false,
+        "encryption_mode": "none",
+        "host_isolation": true,
+        "password": "[redacted]",
+        "remain_time": 14393,
+        "ssid": "[redacted]"
+      }
+    }
+  },
+  "result": "pass"
+}
