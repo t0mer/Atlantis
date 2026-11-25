@@ -234,3 +234,18 @@ func TestNoCallsAfterClose(t *testing.T) {
 		t.Fatalf("Pause after Close: %v", err)
 	}
 }
+
+// A connection error wrapped in a request error still reaches the manager.
+func TestWrappedConnectionErrorsStillCount(t *testing.T) {
+	m := New(&fakeClient{}, nil)
+	err := fmt.Errorf("%w: reading it back failed: %w", deco.ErrNotApplied, deco.ErrOtherAdmin)
+	_ = m.Do(context.Background(), func(context.Context, deco.Client) error { return err })
+	if st := m.Status().State; st != StateBlocked {
+		t.Fatalf("state %s, want blocked", st)
+	}
+	m2 := New(&fakeClient{}, nil)
+	_ = m2.Do(context.Background(), func(context.Context, deco.Client) error { return fmt.Errorf("%w: offline", deco.ErrNotFound) })
+	if st := m2.Status().State; st == StateDisconnected {
+		t.Fatal("a request error must not mark the session disconnected")
+	}
+}

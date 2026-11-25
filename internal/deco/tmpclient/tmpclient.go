@@ -28,8 +28,9 @@ type Dialer func(ctx context.Context, logf func(string, ...any)) (io.ReadWriteCl
 const RawArea = "tmp"
 
 var (
-	_ deco.Client     = (*Client)(nil)
-	_ deco.WiFiWriter = (*Client)(nil)
+	_ deco.Client        = (*Client)(nil)
+	_ deco.WiFiWriter    = (*Client)(nil)
+	_ deco.ClientRenamer = (*Client)(nil)
 )
 
 // Client is a deco.Client for one Deco network. It is safe for concurrent

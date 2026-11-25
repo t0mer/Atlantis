@@ -279,30 +279,84 @@ func (s *Server) client(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"client": all[i], "history": hist})
+	writeJSON(w, http.StatusOK, map[string]any{"client": all[i], "history": hist, "can_rename_on_deco": s.canRename(r)})
 }
 
+// canRename reports whether the connected Deco's client can rename clients
+// (a write verified on hardware).
+func (s *Server) canRename(r *http.Request) bool {
+	cr, ok := runOf(r.Context()).Session.Client().(deco.ClientRenamer)
+	return ok && cr.CanRenameClients()
+}
+
+// patchClient sets a client's name, watch flag and tags. A new name is
+// also set on the Deco (so the Deco app shows it) when the transport can,
+// unless local_only; if the Deco refuses, nothing is saved.
 func (s *Server) patchClient(w http.ResponseWriter, r *http.Request) {
 	mac := deco.NormalizeMAC(pathParam(r, "mac"))
 	var body struct {
-		Alias *string  `json:"alias"`
-		Watch *bool    `json:"watch"`
-		Tags  []string `json:"tags"`
+		Alias     *string  `json:"alias"`
+		Watch     *bool    `json:"watch"`
+		Tags      []string `json:"tags"`
+		LocalOnly bool     `json:"local_only"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
+	if body.Alias != nil {
+		a := strings.TrimSpace(*body.Alias)
+		body.Alias = &a
+	}
 	if body.Alias != nil && len(*body.Alias) > 64 || len(body.Tags) > 20 {
-		writeError(w, http.StatusBadRequest, "alias up to 64 characters and up to 20 tags")
+		writeError(w, http.StatusBadRequest, "name up to 64 bytes and up to 20 tags")
 		return
 	}
-	c, err := s.store.UpdateClientMeta(r.Context(), runOf(r.Context()).Network.ID, mac, store.ClientMeta{Alias: body.Alias, Watch: body.Watch, Tags: body.Tags})
+	run := runOf(r.Context())
+	cur, err := s.store.GetClient(r.Context(), run.Network.ID, mac)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	renamed := false
+	// What the Deco currently calls it decides, not the stored alias: a name
+	// kept in Atlantis only, or one changed in the Deco app, is sent again.
+	if body.Alias != nil && *body.Alias != "" && *body.Alias != cur.Name && !body.LocalOnly && s.canRename(r) {
+		err := run.Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {
+			return c.(deco.ClientRenamer).RenameClient(ctx, mac, *body.Alias)
+		})
+		s.audit(context.WithoutCancel(r.Context()), userFrom(r.Context()), "client.rename", mac+" name="+*body.Alias, err)
+		switch {
+		case err == nil:
+			renamed = true
+		case errors.Is(err, deco.ErrNotFound):
+			writeError(w, http.StatusNotFound, "the Deco doesn't list this device right now; try again while it is online, or save the name in Atlantis only")
+			return
+		case errors.Is(err, deco.ErrInvalid):
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		case errors.Is(err, deco.ErrNotApplied):
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		case errors.Is(err, deco.ErrNotVerified), errors.Is(err, deco.ErrUnsupported), errors.Is(err, session.ErrClosed),
+			errors.Is(err, session.ErrPaused), errors.Is(err, session.ErrBlocked), errors.Is(err, session.ErrStopped):
+			s.fail(w, err)
+			return
+		default:
+			writeError(w, http.StatusBadGateway, "the Deco did not take the new name: "+err.Error())
+			return
+		}
+	}
+	// After a rename on the Deco, save it even if the browser has gone.
+	c, err := s.store.UpdateClientMeta(context.WithoutCancel(r.Context()), run.Network.ID, mac, store.ClientMeta{Alias: body.Alias, Watch: body.Watch, Tags: body.Tags})
 	s.audit(r.Context(), userFrom(r.Context()), "client.update", mac, err)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"mac": c.MAC, "alias": c.Alias, "watch": c.Watch, "tags": c.Tags})
+	if renamed {
+		run.Poller.Refresh() // pick up the Deco's new name
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"mac": c.MAC, "alias": c.Alias, "watch": c.Watch, "tags": c.Tags, "deco_renamed": renamed})
 }
 
 // wifiView is the Wi-Fi settings plus which fields Atlantis may change per

@@ -96,9 +96,9 @@ test("rename and watch a client", async ({ page }) => {
   await signIn(page);
   await page.goto("/clients");
   await page.locator("tbody tr a").first().click();
-  await page.getByLabel("Name in Atlantis").fill("Noa's tablet");
+  await page.getByLabel(/^Name/).fill("Noa's tablet");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved")).toBeVisible();
+  await expect(page.getByText("Renamed on the Deco")).toBeVisible();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Noa's tablet");
   await page.getByRole("switch", { name: "Watch this device" }).click();
   await expect(page.getByText("Now watching")).toBeVisible();

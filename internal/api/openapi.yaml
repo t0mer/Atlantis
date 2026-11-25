@@ -241,13 +241,17 @@ paths:
       responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Client" } } } } } }
   /api/v1/clients/{mac}:
     get:
-      summary: Client detail and presence/throughput history
+      summary: Client detail and presence/throughput history, and whether the Deco can rename it (can_rename_on_deco)
       parameters:
         - { name: mac, in: path, required: true, schema: { type: string } }
         - { name: range, in: query, schema: { type: string, enum: [24h, 7d, 30d] } }
       responses: { "200": { description: OK }, "404": { description: Unknown client } }
     patch:
-      summary: Set a client's alias, watch flag and tags (stored in Atlantis, not on the Deco)
+      summary: Set a client's name, watch flag and tags
+      description: |
+        A new name is also set on the Deco, so the Deco app shows it, when the Deco supports
+        renaming (`can_rename_on_deco`) and `local_only` is not set. The Deco is renamed first;
+        if it refuses, nothing is saved. Clearing the name only clears it in Atlantis.
       security: [ { session: [], csrf: [] } ]
       parameters: [ { name: mac, in: path, required: true, schema: { type: string } } ]
       requestBody:
@@ -256,10 +260,16 @@ paths:
             schema:
               type: object
               properties:
-                alias: { type: string, maxLength: 64 }
+                alias: { type: string, maxLength: 64, description: The device's name (up to 64 bytes) }
                 watch: { type: boolean }
                 tags: { type: array, maxItems: 20, items: { type: string } }
-      responses: { "200": { description: Updated }, "404": { description: Unknown client } }
+                local_only: { type: boolean, description: Keep the name in Atlantis only; the Deco is not renamed }
+      responses:
+        "200": { description: "Updated; deco_renamed says whether the Deco was renamed" }
+        "400": { description: Invalid name }
+        "404": { description: Unknown client, or the Deco doesn't list it right now (nothing saved) }
+        "502": { description: "The Deco refused the name, or did not confirm it (it may have taken it); nothing saved in Atlantis" }
+        "503": { description: The Deco session is paused or blocked (nothing saved) }
   /api/v1/wifi:
     get:
       summary: Wi-Fi bands and networks (no passwords), plus which fields Atlantis may change per network

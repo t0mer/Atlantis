@@ -90,3 +90,34 @@ func TestRefreshIntervals(t *testing.T) {
 		t.Fatalf("%d %v", code, m)
 	}
 }
+
+func TestRenameAlsoRenamesOnTheDeco(t *testing.T) {
+	e := newEnv(t)
+	e.login(t)
+	_, m, _ := e.do(t, "GET", "/api/v1/clients/aa:bb:cc:dd:ee:01", "", false)
+	if m["can_rename_on_deco"] != true {
+		t.Fatalf("%v", m["can_rename_on_deco"])
+	}
+	code, m, _ := e.do(t, "PATCH", "/api/v1/clients/aa:bb:cc:dd:ee:01", `{"alias":" מטבח "}`, true)
+	if code != 200 || m["deco_renamed"] != true || m["alias"] != "מטבח" || len(e.fake.renames) != 1 || e.fake.renames[0] != "aa:bb:cc:dd:ee:01=מטבח" {
+		t.Fatalf("%d %v %v", code, m, e.fake.renames)
+	}
+	// Tags alone, the Deco's own name, or local_only never touch the Deco.
+	e.do(t, "PATCH", "/api/v1/clients/aa:bb:cc:dd:ee:01", `{"tags":["kids"]}`, true)
+	e.do(t, "PATCH", "/api/v1/clients/aa:bb:cc:dd:ee:01", `{"alias":"Phone"}`, true) // what the Deco calls it
+	code, m, _ = e.do(t, "PATCH", "/api/v1/clients/aa:bb:cc:dd:ee:01", `{"alias":"Only here","local_only":true}`, true)
+	if code != 200 || m["deco_renamed"] != false || len(e.fake.renames) != 1 {
+		t.Fatalf("%d %v %v", code, m, e.fake.renames)
+	}
+	// Saving the same Atlantis-only name again, without local_only, sends it.
+	code, m, _ = e.do(t, "PATCH", "/api/v1/clients/aa:bb:cc:dd:ee:01", `{"alias":"Only here"}`, true)
+	if code != 200 || m["deco_renamed"] != true || len(e.fake.renames) != 2 {
+		t.Fatalf("%d %v %v", code, m, e.fake.renames)
+	}
+	// A device the Deco doesn't list: nothing is saved.
+	code, _, _ = e.do(t, "PATCH", "/api/v1/clients/02:bb:cc:dd:ee:02", `{"alias":"Gone"}`, true)
+	_, m, _ = e.do(t, "GET", "/api/v1/clients/02:bb:cc:dd:ee:02", "", false)
+	if code != 404 || m["client"].(map[string]any)["alias"] == "Gone" {
+		t.Fatalf("%d %v", code, m["client"])
+	}
+}

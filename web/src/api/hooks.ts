@@ -44,7 +44,8 @@ export const useEvents = (since?: string) =>
 export const useClient = (mac: string, range: Range) =>
   useQuery({
     queryKey: ["client", mac, range],
-    queryFn: () => api<{ client: Client; history: Point[] | null }>(`/api/v1/clients/${encodeURIComponent(mac)}?range=${range}`),
+    queryFn: () =>
+      api<{ client: Client; history: Point[] | null; can_rename_on_deco?: boolean }>(`/api/v1/clients/${encodeURIComponent(mac)}?range=${range}`),
   });
 
 export const useNode = (id: string, range: Range) =>
@@ -61,8 +62,8 @@ function useInvalidate(...keys: string[][]) {
 export function useUpdateClient(mac: string) {
   const done = useInvalidate(["clients"], ["client", mac]);
   return useMutation({
-    mutationFn: (body: { alias?: string; watch?: boolean; tags?: string[] }) =>
-      api(`/api/v1/clients/${encodeURIComponent(mac)}`, { method: "PATCH", body }),
+    mutationFn: (body: { alias?: string; watch?: boolean; tags?: string[]; local_only?: boolean }) =>
+      api<{ deco_renamed?: boolean }>(`/api/v1/clients/${encodeURIComponent(mac)}`, { method: "PATCH", body }),
     onSuccess: done,
   });
 }

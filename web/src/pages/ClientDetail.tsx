@@ -31,6 +31,7 @@ export function ClientDetail() {
   const c = data?.client;
   const [alias, setAlias] = useState("");
   const [tags, setTags] = useState("");
+  const [localOnly, setLocalOnly] = useState(false);
   useEffect(() => {
     if (c) {
       setAlias(c.alias);
@@ -41,8 +42,13 @@ export function ClientDetail() {
   if (!c) return <p className="text-drift">Loading…</p>;
   const node = nodes.find((n) => n.id === c.node_id);
   const mine = events.filter((e) => e.subject === c.mac);
-  const save = (body: { alias?: string; watch?: boolean; tags?: string[] }, msg: string) =>
-    update.mutate(body, { onSuccess: () => toast(msg), onError: (e) => toast((e as Error).message, "bad") });
+  const canRename = !!data?.can_rename_on_deco;
+  const nameBytes = new TextEncoder().encode(alias.trim()).length; // the Deco limit is in bytes
+  const save = (body: { alias?: string; watch?: boolean; tags?: string[]; local_only?: boolean }, msg: string) =>
+    update.mutate(body, {
+      onSuccess: (r) => toast(r?.deco_renamed ? "Renamed on the Deco" : msg),
+      onError: (e) => toast((e as Error).message, "bad"),
+    });
   return (
     <div className="space-y-6">
       <div>
@@ -104,22 +110,39 @@ export function ClientDetail() {
         </Panel>
       </div>
 
-      <Panel title="In Atlantis">
+      <Panel title="Name and tags">
         <div className="grid gap-4 md:grid-cols-2">
           <form
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
-              save({ alias: alias.trim(), tags: tags.split(",").map((t) => t.trim()).filter(Boolean) }, "Saved");
+              // Send the name only when it was edited, so saving tags never
+              // renames the device on the Deco.
+              const name = alias.trim();
+              const body = { tags: tags.split(",").map((t) => t.trim()).filter(Boolean) };
+              save(name !== c.alias ? { ...body, alias: name, local_only: localOnly } : body, "Saved");
             }}
           >
-            <Field label="Name in Atlantis" hint="Only Atlantis uses this name; the Deco keeps its own.">
-              <Input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder={c.name || c.mac} maxLength={64} dir="auto" />
+            <Field
+              label="Name"
+              hint={
+                `${
+                  canRename && !localOnly ? "Also changes the name on the Deco and in the Deco app." : "Only Atlantis uses this name; the Deco keeps its own."
+                } Up to 64 bytes (Hebrew letters count as 2); now ${nameBytes}.`
+              }
+            >
+              <Input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder={c.name || c.mac} dir="auto" />
             </Field>
+            {canRename && (
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={localOnly} onChange={(e) => setLocalOnly(e.target.checked)} className="accent-lagoon" />
+                Only in Atlantis (don't rename on the Deco)
+              </label>
+            )}
             <Field label="Tags" hint="Separate tags with commas.">
               <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="kids, work" dir="auto" />
             </Field>
-            <Button tone="primary" type="submit" disabled={update.isPending}>
+            <Button tone="primary" type="submit" disabled={update.isPending || nameBytes > 64}>
               Save
             </Button>
           </form>

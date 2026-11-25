@@ -1,4 +1,59 @@
 {
-  "client_list": [],
+  "client_list": [
+    {
+      "access_host": "1",
+      "client_type": "phone",
+      "enable_isolation": false,
+      "enable_priority": false,
+      "has_set_client_type": false,
+      "history_wire_type": "wireless",
+      "interface": "main",
+      "ip": "",
+      "link_priority": {
+        "band_auto": true,
+        "device_auto": true
+      },
+      "mac": "02-00-00-00-00-01",
+      "name": "bmFtZS0x",
+      "online": false,
+      "owner_id": "",
+      "remain_time": 0,
+      "space_id": "1",
+      "time_period": 0,
+      "wire_type": "unknown"
+    },
+    {
+      "access_host": "1",
+      "client_mesh": true,
+      "client_type": "tablet",
+      "enable_isolation": false,
+      "enable_priority": false,
+      "has_set_client_type": false,
+      "interface": "main",
+      "ip": "198.18.0.1",
+      "link_priority": {
+        "band_auto": true,
+        "device_auto": true
+      },
+      "linked_device_info": {
+        "connection_type": [
+          "band2_4"
+        ],
+        "device_id": "[redacted]",
+        "signal_level": {
+          "band2_4": 1,
+          "band5": 0
+        }
+      },
+      "mac": "02-00-00-00-00-02",
+      "name": "bmFtZS0y",
+      "online": true,
+      "owner_id": "",
+      "remain_time": 0,
+      "space_id": "1",
+      "time_period": 0,
+      "wire_type": "wireless"
+    }
+  ],
   "priority_count_max": 128
 }

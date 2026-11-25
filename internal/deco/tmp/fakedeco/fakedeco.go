@@ -30,6 +30,7 @@ type Device struct {
 	stall     tmp.Opcode
 	relayFail bool
 	ignoreSet int  // WIRELESS_SETs to acknowledge without applying
+	ignoreCli int  // CLIENT_LIST_SETs to acknowledge without applying
 	failRead  bool // fail the first WIRELESS_GET after a WIRELESS_SET
 	readArmed bool
 	assocReqs int
@@ -87,6 +88,10 @@ func (d *Device) SetResult(op tmp.Opcode, result any) {
 // IgnoreWirelessSets makes the next n WIRELESS_SETs succeed without
 // changing anything (a device that does not apply a change).
 func (d *Device) IgnoreWirelessSets(n int) { d.mu.Lock(); d.ignoreSet = n; d.mu.Unlock() }
+
+// IgnoreClientSets makes the next n CLIENT_LIST_SETs succeed without
+// changing anything.
+func (d *Device) IgnoreClientSets(n int) { d.mu.Lock(); d.ignoreCli = n; d.mu.Unlock() }
 
 // FailWirelessGetAfterSet makes the first WIRELESS_GET after the next
 // WIRELESS_SET fail, as if the read-back were lost.
@@ -233,6 +238,16 @@ func (d *Device) execute(st *stream, op tmp.Opcode, body []byte) ([]byte, byte) 
 		b, _ := json.Marshal(map[string]any{"error_code": -1, "msg": "read failed"})
 		return b, 0
 	}
+	if op == tmp.OpClientListSet {
+		code := 0
+		if d.ignoreCli > 0 {
+			d.ignoreCli--
+		} else if !d.applyClientSet(body) {
+			code = -1
+		}
+		b, _ := json.Marshal(map[string]any{"error_code": code, "result": map[string]any{}})
+		return b, 0
+	}
 	res, ok := d.results[op]
 	if !ok {
 		b, _ := json.Marshal(map[string]any{"error_code": -40101, "msg": "unsupported"})
@@ -333,5 +348,56 @@ func (d *Device) applyWirelessSet(body []byte) bool {
 			}
 		}
 	}
+	return true
+}
+
+// applyClientSet merges a CLIENT_LIST_SET's sparse entries into the stored
+// CLIENT_LIST_GET result, matching clients by MAC exactly as listed. Like a
+// strict device it rejects the whole change for an unknown MAC or a field
+// the client entry does not have (user_set_name_type is write-only).
+func (d *Device) applyClientSet(body []byte) bool {
+	var req struct {
+		Params struct {
+			ClientList []map[string]any `json:"client_list"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(body, &req) != nil || len(req.Params.ClientList) == 0 {
+		return false
+	}
+	// Work on a JSON copy, whatever Go types the result was set with.
+	var cur map[string]any
+	b, _ := json.Marshal(d.results[tmp.OpClientListGet])
+	if json.Unmarshal(b, &cur) != nil {
+		return false
+	}
+	list, _ := cur["client_list"].([]any)
+	find := func(mac any) map[string]any {
+		for _, c := range list {
+			if m, ok := c.(map[string]any); ok && m["mac"] == mac {
+				return m
+			}
+		}
+		return nil
+	}
+	for _, e := range req.Params.ClientList {
+		c := find(e["mac"])
+		if c == nil {
+			return false
+		}
+		for k := range e {
+			if _, ok := c[k]; !ok && k != "user_set_name_type" {
+				return false
+			}
+		}
+	}
+	for _, e := range req.Params.ClientList {
+		c := find(e["mac"])
+		for k, v := range e {
+			if k != "user_set_name_type" {
+				c[k] = v
+			}
+		}
+	}
+	d.results[tmp.OpClientListGet] = cur
 	return true
 }
