@@ -32,6 +32,7 @@ function SettingsPanel({
   saved,
   children,
   note,
+  onSaved,
 }: {
   title: string;
   source?: SettingSource;
@@ -40,6 +41,7 @@ function SettingsPanel({
   saved: string;
   children: ReactNode;
   note?: ReactNode;
+  onSaved?: () => void;
 }) {
   const save = useSaveSettings();
   const toast = useToast();
@@ -51,7 +53,7 @@ function SettingsPanel({
         <p className="text-xs text-drift">
           {source && sourceNote(source)} {note}
         </p>
-        <Button tone="primary" disabled={!changed || save.isPending} onClick={() => save.mutate(patch(), { onSuccess: () => toast(saved) })}>
+        <Button tone="primary" disabled={!changed || save.isPending} onClick={() => save.mutate(patch(), { onSuccess: () => (onSaved?.(), toast(saved)) })}>
           Save
         </Button>
       </div>
@@ -72,7 +74,13 @@ export function HistoryPanel({ s }: { s: Settings }) {
       source={s.history.source}
       changed={changed}
       saved="History settings saved"
-      patch={() => ({ history: { raw_retention: `${raw}h`, rollup_retention: `${rollup}h` } })}
+      // An untouched value is sent back exactly as it was (hours are rounded for display).
+      patch={() => ({
+        history: {
+          raw_retention: raw === hoursOf(s.history.raw_retention) ? s.history.raw_retention : `${raw}h`,
+          rollup_retention: rollup === hoursOf(s.history.rollup_retention) ? s.history.rollup_retention : `${rollup}h`,
+        },
+      })}
       note="Older data is removed within the hour."
     >
       <div className="grid gap-4 sm:grid-cols-2">
@@ -196,6 +204,7 @@ export function OpenWAPanel({ s }: { s: Settings }) {
       changed={changed}
       saved="WhatsApp defaults saved"
       patch={() => ({ openwa: { url: url.trim(), default_chat: chat.trim(), api_key: secret(key.trim(), clear) } })}
+      onSaved={() => (setKey(""), setClear(false))}
       note="WhatsApp channels that leave these empty use them."
     >
       <div className="grid gap-4 sm:grid-cols-2">
@@ -225,6 +234,7 @@ export function MetricsPanel({ s }: { s: Settings }) {
       changed={changed}
       saved="Metrics settings saved"
       patch={() => ({ metrics: { enabled, path: path.trim(), per_client: per, token: secret(token.trim(), clear) } })}
+      onSaved={() => (setToken(""), setClear(false))}
       note={enabled ? `Scrape ${location.origin}${path}.` : undefined}
     >
       <LabeledSwitch checked={enabled} onChange={setEnabled} label="Serve Prometheus metrics" />
