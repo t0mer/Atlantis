@@ -294,7 +294,10 @@ func (s *Session) writeFrame(f Frame) error {
 		return err
 	}
 	s.touch()
-	_, err = s.conn.Write(b)
+	if _, err = s.conn.Write(b); err != nil {
+		err = fmt.Errorf("tmp: writing: %w", err)
+		s.fail(err) // a broken stream is fatal, whichever side notices first
+	}
 	return err
 }
 
