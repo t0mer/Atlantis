@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/deco/tmp"
@@ -132,5 +133,28 @@ func TestLoginErrorsAreNotUnsupported(t *testing.T) {
 	}
 	if _, err := c.Performance(context.Background()); !errors.Is(err, boom) {
 		t.Fatalf("Performance: %v", err)
+	}
+}
+
+// Review finding: a session-limit bye received while idle must be reported
+// on the next call, not hidden by an immediate reconnect.
+func TestIdleByeIsReported(t *testing.T) {
+	d := fakedeco.New()
+	d.ByeAfter(tmp.OpDeviceListGet)
+	dials := 0
+	c := tmpclient.New(func(context.Context, func(string, ...any)) (io.ReadWriteCloser, error) {
+		dials++
+		cl, s := net.Pipe()
+		go d.Serve(s)
+		return cl, nil
+	}, tmp.Options{})
+	defer c.Logout(context.Background())
+	if _, err := c.Devices(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond) // the bye arrives while idle
+	_, err := c.Devices(context.Background())
+	if !errors.Is(err, deco.ErrOtherAdmin) || dials != 1 {
+		t.Fatalf("want ErrOtherAdmin without reconnecting, got %v (dials=%d)", err, dials)
 	}
 }

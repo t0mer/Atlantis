@@ -70,8 +70,15 @@ func (c *Client) Login(ctx context.Context) error {
 		return nil
 	}
 	if c.sess != nil { // dead session: release it before reconnecting
+		dead := c.sess.Err()
 		c.sess.Close()
 		c.sess = nil
+		// The Deco ended an idle session because another admin (usually
+		// the Deco app) took its slot: report it so the caller backs off,
+		// instead of reconnecting at once and kicking the app out.
+		if errors.Is(dead, deco.ErrOtherAdmin) {
+			return dead
+		}
 	}
 	logf := c.logf
 	if logf == nil {
