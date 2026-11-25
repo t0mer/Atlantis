@@ -35,7 +35,7 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   if (res.status === 401 && !path.startsWith("/api/v1/auth/")) onUnauthorized();
   if (res.status === 204) return undefined as T;
   const text = await res.text();
-  let data: unknown = undefined;
+  let data: unknown;
   try {
     data = text ? JSON.parse(text) : undefined;
   } catch {

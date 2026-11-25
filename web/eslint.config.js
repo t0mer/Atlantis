@@ -6,5 +6,6 @@ export default tseslint.config(
   { ignores: ["dist"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
-  { plugins: { "react-hooks": hooks }, rules: hooks.configs.recommended.rules },
+  // The two classic hook rules; v7's recommended set adds React Compiler rules this app doesn't use.
+  { plugins: { "react-hooks": hooks }, rules: { "react-hooks/rules-of-hooks": "error", "react-hooks/exhaustive-deps": "warn" } },
 );
