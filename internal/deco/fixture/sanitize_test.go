@@ -134,6 +134,40 @@ func TestSanitizeCloudIdentifiers(t *testing.T) {
 	}
 }
 
+// Second review: underscore-joined addresses, *_pwd keys, plain id keys and
+// long hex IDs used as map keys.
+func TestSanitizeSecondReviewCases(t *testing.T) {
+	in := `{
+	  "label_free": "Deco_AABBCCDDEE11",
+	  "x": "mac=aabbccddee22_x",
+	  "y": "192.168.68.31_lan",
+	  "pppoe_pwd": "pppoe-secret",
+	  "wifi_pass": "wifi-secret",
+	  "id": "8012ABCDEF0123456789ABCDEF0123456789ABCD",
+	  "by_device": {"8012FEDCBA9876543210FEDCBA9876543210FEDC": {"ok": true}}
+	}`
+	out, err := NewSanitizer().Sanitize(json.RawMessage(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, leaked := range []string{
+		"AABBCCDDEE11", "aabbccddee22", "192.168.68.31", "pppoe-secret", "wifi-secret",
+		"8012ABCDEF0123456789", "8012FEDCBA9876543210",
+	} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("sanitised output still contains %q:\n%s", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "_lan") {
+		t.Errorf("text around the address should survive:\n%s", got)
+	}
+	red, _ := Redact(json.RawMessage(`{"pppoe_pwd":"a","Wifi_Pass":"b"}`))
+	if strings.Contains(string(red), `"a"`) || strings.Contains(string(red), `"b"`) {
+		t.Errorf("Redact kept a password: %s", red)
+	}
+}
+
 func TestSanitizeIPReplacementsStayUnique(t *testing.T) {
 	s := NewSanitizer()
 	seen := map[string]string{}
