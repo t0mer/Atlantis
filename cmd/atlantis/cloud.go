@@ -265,6 +265,7 @@ func readSession(ctx context.Context, c *tmpclient.Client, o sessionOutput) erro
 		{"WIRELESS_GET", "WIRELESS_GET", nil},
 		{"FW_LATEST_GET", "FW_LATEST_GET", nil},
 		{"BLOCKED_LIST_GET", "BLOCKED_LIST_GET", nil},
+		{"DEVICE_RESOURCE_LIST_GET", "DEVICE_RESOURCE_LIST_GET", nil},
 	}
 	if master != "" {
 		steps = append(steps, cloudStep{"DEVICE_RESOURCE_INFO_GET", "DEVICE_RESOURCE_INFO_GET",
