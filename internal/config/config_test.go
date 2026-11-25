@@ -23,7 +23,7 @@ const minimal = `
 deco:
   host: 192.0.2.10
   email: owner@example.com
-secret_key: dGVzdA==
+secret_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 `
 
 func TestDefaultsAndYAML(t *testing.T) {
@@ -58,6 +58,7 @@ func TestPrecedenceFlagOverEnvOverYAML(t *testing.T) {
 
 func TestValidationReportsEveryProblem(t *testing.T) {
 	_, err := Load(writeYAML(t, `
+secret_key: dGVzdA==
 deco: {transport: telnet}
 poll: {fast: 2s}
 metrics: {per_client: some}
@@ -92,5 +93,12 @@ func TestDecoIsOptional(t *testing.T) {
 	_, err := Load(writeYAML(t, "deco: {host: 192.0.2.1}\n"), nil)
 	if err == nil || !strings.Contains(err.Error(), "deco.email") {
 		t.Fatalf("a host without the TP-Link ID must fail: %v", err)
+	}
+}
+
+func TestSecretKeyIsOptional(t *testing.T) {
+	t.Setenv("ATLANTIS_SECRET_KEY", "")
+	if _, err := Load(writeYAML(t, "server: {listen: ':8080'}\n"), nil); err != nil {
+		t.Fatalf("no key must be fine: a key file is created next to the data: %v", err)
 	}
 }

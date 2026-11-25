@@ -1,5 +1,6 @@
 // Package secret encrypts stored credentials (the Deco password, channel
-// URLs and tokens) with AES-256-GCM under ATLANTIS_SECRET_KEY.
+// URLs and tokens) with AES-256-GCM under ATLANTIS_SECRET_KEY, or under a
+// key file created next to the database on first start.
 package secret
 
 import (
@@ -9,6 +10,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 )
 
@@ -83,4 +86,50 @@ func (b *Box) Open(sealed string) (string, error) {
 		return "", ErrBadSecret
 	}
 	return string(pt), nil
+}
+
+// KeyFileName is the key file kept next to the database when
+// ATLANTIS_SECRET_KEY is not set.
+const KeyFileName = "secret.key"
+
+// ErrNoKeyFile means the key file is missing but may not be created
+// (the database already holds data sealed with some other key).
+var ErrNoKeyFile = errors.New("secret: the key file is missing")
+
+// LoadKeyFile reads the key at path. If the file does not exist and create
+// is true, it writes a new random key there (owner-only, created
+// exclusively so two starts never race) and reports created.
+func LoadKeyFile(path string, create bool) (key string, created bool, err error) {
+	b, err := os.ReadFile(path)
+	if err == nil {
+		key = strings.TrimSpace(string(b))
+		if _, err := New(key); err != nil {
+			return "", false, fmt.Errorf("%s: %w", path, err)
+		}
+		return key, false, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", false, err
+	}
+	if !create {
+		return "", false, fmt.Errorf("%w: %s", ErrNoKeyFile, path)
+	}
+	key = NewKey()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) { // another start won the race: use its key
+		return LoadKeyFile(path, false)
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := f.WriteString(key + "\n"); err != nil {
+		f.Close()
+		os.Remove(path)
+		return "", false, err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return "", false, err
+	}
+	return key, true, nil
 }

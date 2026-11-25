@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -92,15 +93,15 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// abandoned notification send cannot hang for ever.
 	http.DefaultClient.Timeout = 30 * time.Second
 
-	box, err := secret.New(cfg.SecretKey)
-	if err != nil {
-		return err
-	}
 	st, err := store.Open(ctx, cfg.Store.Path)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", cfg.Store.Path, err)
 	}
 	defer st.Close()
+	box, err := openBox(ctx, cfg, st, log)
+	if err != nil {
+		return err
+	}
 
 	if err := seedDeco(ctx, cfg, st, box, log); err != nil {
 		return err
@@ -204,4 +205,33 @@ func seedDeco(ctx context.Context, cfg *config.Config, st *store.Store, box *sec
 		log.Warn("deco.* in the configuration is ignored: a Deco is already stored; change it in Settings", "stored", cur.Host, "configured", cfg.Deco.Host)
 	}
 	return nil
+}
+
+// openBox returns the box for stored secrets. ATLANTIS_SECRET_KEY wins;
+// otherwise the key lives in secret.key next to the database and is
+// created on first start. It is never created for a database that already
+// holds encrypted data: that data needs the key it was sealed with.
+func openBox(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) (*secret.Box, error) {
+	if cfg.SecretKey != "" {
+		return secret.New(cfg.SecretKey)
+	}
+	path := filepath.Join(filepath.Dir(cfg.Store.Path), secret.KeyFileName)
+	sealed, err := st.HasSealed(ctx)
+	if err != nil {
+		return nil, err
+	}
+	key, created, err := secret.LoadKeyFile(path, !sealed)
+	if errors.Is(err, secret.ErrNoKeyFile) {
+		return nil, fmt.Errorf("%s holds encrypted passwords, but there is no ATLANTIS_SECRET_KEY and no %s: "+
+			"set ATLANTIS_SECRET_KEY to the key this database was used with", cfg.Store.Path, path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if created {
+		log.Warn("created a new secret key; back it up together with the database", "path", path)
+	} else {
+		log.Info("using the secret key file", "path", path)
+	}
+	return secret.New(key)
 }

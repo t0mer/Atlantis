@@ -231,3 +231,15 @@ func (s *Store) SetNetworkName(ctx context.Context, networkID int64, name string
 	_, err := s.db.ExecContext(ctx, `UPDATE networks SET name=? WHERE id=?`, name, networkID)
 	return err
 }
+
+// HasSealed reports whether anything in the database is encrypted with the
+// secret key (the Deco password, channel configs, sealed settings), so a
+// missing key would make it unreadable.
+func (s *Store) HasSealed(ctx context.Context) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM networks WHERE password_enc != '') +
+		(SELECT COUNT(*) FROM channels WHERE config_enc != '') +
+		(SELECT COUNT(*) FROM settings WHERE value_json LIKE '%"v1:%')`).Scan(&n)
+	return n > 0, err
+}

@@ -12,6 +12,8 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+
+	"github.com/t0mer/atlantis/internal/secret"
 )
 
 // Config is the full configuration.
@@ -222,8 +224,11 @@ func (c *Config) Validate() error {
 	default:
 		bad("log.format must be json or text")
 	}
-	if c.SecretKey == "" {
-		bad("ATLANTIS_SECRET_KEY is required (generate one with `atlantis keygen`)")
+	// Optional: without it, a key file is kept next to the database.
+	if c.SecretKey != "" {
+		if _, err := secret.New(c.SecretKey); err != nil {
+			bad("ATLANTIS_SECRET_KEY: %v (generate one with `atlantis keygen`)", err)
+		}
 	}
 	return errors.Join(errs...)
 }
