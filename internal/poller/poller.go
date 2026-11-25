@@ -46,8 +46,8 @@ type Snapshot struct {
 	// offer them (for example in access-point mode).
 	WANSupported         bool      `json:"wan_supported"`
 	PerformanceSupported bool      `json:"performance_supported"`
-	FastAt               time.Time `json:"fast_at,omitempty"`
-	SlowAt               time.Time `json:"slow_at,omitempty"`
+	FastAt               time.Time `json:"fast_at,omitzero"`
+	SlowAt               time.Time `json:"slow_at,omitzero"`
 }
 
 // Poller runs the loops.
@@ -180,10 +180,19 @@ func (p *Poller) Fast(ctx context.Context) {
 	if err = p.store.SaveClients(ctx, p.opts.NetworkID, list, presence); err != nil {
 		return
 	}
-	samples := make([]store.ClientSample, 0, len(list))
+	samples := make([]store.ClientSample, 0, len(presence))
+	listed := make(map[string]bool, len(list))
 	for _, c := range list {
+		listed[c.MAC] = true
 		samples = append(samples, store.ClientSample{MAC: c.MAC, NodeID: c.NodeID, Band: c.Band, Network: c.Network,
 			IP: c.IP, Online: c.Online, UpBps: c.UpBps, DownBps: c.DownBps})
+	}
+	// Many models list only connected clients. Record known clients that
+	// are offline and absent too, so history shows them offline, not as a gap.
+	for mac, on := range presence {
+		if !on && !listed[mac] {
+			samples = append(samples, store.ClientSample{MAC: mac})
+		}
 	}
 	if err = p.store.AddSamples(ctx, p.opts.NetworkID, nil, samples); err != nil {
 		return

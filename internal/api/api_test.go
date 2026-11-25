@@ -150,6 +150,14 @@ func TestAuthFlow(t *testing.T) {
 	if code, _, _ := e.do(t, "POST", "/api/v1/auth/setup", `{"username":"admin","password":"short"}`, false); code != 400 {
 		t.Fatal("weak password accepted")
 	}
+	// A cross-site form can only send text/plain; it must not reach setup.
+	req, _ := http.NewRequest("POST", e.srv.URL+"/api/v1/auth/setup", strings.NewReader(`{"username":"evil","password":"aaaaaaaaaa="}`))
+	req.Header.Set("Content-Type", "text/plain")
+	if resp, err := e.cl.Do(req); err != nil || resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("text/plain setup: %v %v", resp, err)
+	} else {
+		resp.Body.Close()
+	}
 	e.login(t)
 	if code, _, _ := e.do(t, "POST", "/api/v1/auth/setup", `{"username":"evil","password":"another long one"}`, false); code != 409 {
 		t.Fatal("setup replayed")
@@ -180,7 +188,7 @@ func TestReadEndpoints(t *testing.T) {
 		t.Fatalf("network: %s", raw)
 	}
 	_, _, nodes := e.do(t, "GET", "/api/v1/nodes", "", false)
-	if !strings.Contains(nodes, `"Nickname":"Main"`) || !strings.Contains(nodes, `"clients":1`) {
+	if !strings.Contains(nodes, `"nickname":"Main"`) || !strings.Contains(nodes, `"clients":1`) {
 		t.Fatalf("nodes: %s", nodes)
 	}
 	_, _, cl := e.do(t, "GET", "/api/v1/clients?online=true", "", false)
@@ -217,6 +225,10 @@ func TestClientMetaAndAudit(t *testing.T) {
 	}
 	if code, _, _ := e.do(t, "PATCH", "/api/v1/clients/aa:bb:cc:dd:ee:01", `{"nickname":"x"}`, true); code != 400 {
 		t.Fatal("unknown field accepted")
+	}
+	// Browsers' encodeURIComponent escapes the colons; the route must still match.
+	if code, _, raw := e.do(t, "GET", "/api/v1/clients/aa%3Abb%3Acc%3Add%3Aee%3A01", "", false); code != 200 || !strings.Contains(raw, "Kid's phone") {
+		t.Fatalf("escaped MAC: %d %s", code, raw)
 	}
 	_, _, audit := e.do(t, "GET", "/api/v1/audit", "", false)
 	if !strings.Contains(audit, "client.update") {
@@ -317,7 +329,7 @@ func TestStreamSendsSnapshot(t *testing.T) {
 			lines = append(lines, l)
 		}
 	}
-	if len(lines) < 4 || lines[0] != "event: snapshot" || !strings.Contains(lines[1], `"Nickname":"Main"`) || lines[2] != "event: session" {
+	if len(lines) < 4 || lines[0] != "event: snapshot" || !strings.Contains(lines[1], `"nickname":"Main"`) || lines[2] != "event: session" {
 		t.Fatalf("%v", lines)
 	}
 }

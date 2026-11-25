@@ -12,10 +12,8 @@ import (
 	"github.com/t0mer/atlantis/internal/tplinkcloud"
 )
 
-// RawArea and ErrNotImplemented are re-exported from tmpclient.
+// RawArea is re-exported from tmpclient.
 const RawArea = tmpclient.RawArea
-
-var ErrNotImplemented = tmpclient.ErrNotImplemented
 
 // Client is the session client a site uses.
 type Client = tmpclient.Client

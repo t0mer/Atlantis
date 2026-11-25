@@ -38,8 +38,8 @@ type Status struct {
 	State     State     `json:"state"`
 	Since     time.Time `json:"since"`
 	Error     string    `json:"error,omitempty"`
-	RetryAt   time.Time `json:"retry_at,omitempty"`
-	LastOK    time.Time `json:"last_ok,omitempty"`
+	RetryAt   time.Time `json:"retry_at,omitzero"`
+	LastOK    time.Time `json:"last_ok,omitzero"`
 	Logins    int       `json:"logins"`
 	PausedFor string    `json:"paused_for,omitempty"`
 }

@@ -302,17 +302,34 @@ func (s *Session) await(ctx context.Context, op Opcode, id uint16, abort <-chan 
 		case <-abort:
 			return Packet{}, ErrSessionClosed
 		case <-s.deadCh:
-			return Packet{}, s.deadErr()
+			// A reply read before the session ended (e.g. a bye right
+			// behind it) still counts: select picks randomly between
+			// ready cases, so drain what is already buffered first.
+			for {
+				select {
+				case p := <-s.in:
+					if p.TransID == id {
+						return reply(op, p)
+					}
+					continue
+				default:
+				}
+				return Packet{}, s.deadErr()
+			}
 		case p := <-s.in:
 			if p.TransID != id {
 				continue // stale reply to an abandoned transaction
 			}
-			if p.Err != 0 {
-				return Packet{}, AppV2Error{Op: op, Code: p.Err}
-			}
-			return p, nil
+			return reply(op, p)
 		}
 	}
+}
+
+func reply(op Opcode, p Packet) (Packet, error) {
+	if p.Err != 0 {
+		return Packet{}, AppV2Error{Op: op, Code: p.Err}
+	}
+	return p, nil
 }
 
 func (s *Session) writeFrame(f Frame) error {
@@ -434,13 +451,13 @@ func (s *Session) Close() error {
 		if s.token != nil && s.deadErr() == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			// The reply is ignored, as in the app (o.java M()).
-			s.transact(ctx, OpTokenFree, s.token, nil)
+			_, _, _ = s.transact(ctx, OpTokenFree, s.token, nil)
 			cancel()
 			s.token = nil
 		}
 		s.mu.Unlock()
 		if s.deadErr() == nil {
-			s.writeFrame(Frame{Ctrl: CtrlBye})
+			_ = s.writeFrame(Frame{Ctrl: CtrlBye}) // best effort; the transport closes next
 		}
 		close(s.done)
 		err = s.conn.Close()

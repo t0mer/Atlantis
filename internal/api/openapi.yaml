@@ -55,25 +55,28 @@ components:
     Backhaul:
       type: object
       properties:
-        Type: { type: string, enum: ["", wired, wifi, plc, plc+wifi, other] }
-        Links: { type: array, items: { type: string } }
-        Signal: { type: object, additionalProperties: { type: integer } }
+        type: { type: string, enum: ["", wired, wifi, plc, plc+wifi, other] }
+        links: { type: array, items: { type: string } }
+        signal: { type: object, additionalProperties: { type: integer }, description: "bars per band; 3+ strong" }
     Node:
       type: object
       properties:
-        ID: { type: string }
-        MAC: { type: string }
-        IP: { type: string }
-        Nickname: { type: string }
-        Model: { type: string }
-        HardwareVer: { type: string }
-        SoftwareVer: { type: string }
-        Master: { type: boolean }
-        Online: { type: boolean }
-        InternetOnline: { type: boolean }
-        InternetError: { type: string }
-        ParentID: { type: string }
-        Backhaul: { $ref: "#/components/schemas/Backhaul" }
+        id: { type: string }
+        mac: { type: string }
+        ip: { type: string }
+        nickname: { type: string }
+        model: { type: string }
+        hardware_ver: { type: string }
+        software_ver: { type: string }
+        master: { type: boolean }
+        online: { type: boolean }
+        internet_online: { type: boolean }
+        internet_error: { type: string }
+        parent_id: { type: string }
+        backhaul: { $ref: "#/components/schemas/Backhaul" }
+        role: { type: string }
+        group_status: { type: string }
+        inet_status: { type: string }
         first_seen: { type: string, format: date-time }
         last_seen: { type: string, format: date-time }
         clients: { type: integer }

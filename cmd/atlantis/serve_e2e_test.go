@@ -94,7 +94,7 @@ func TestServeEndToEnd(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if len(nodes) != 1 || nodes[0]["Nickname"] != "Living" {
+	if len(nodes) != 1 || nodes[0]["nickname"] != "Living" {
 		t.Fatalf("nodes: %v\nlogs:\n%s", nodes, logs.String())
 	}
 	resp, _ = cl.Get(base + "/api/v1/session")

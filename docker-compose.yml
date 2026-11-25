@@ -1,0 +1,22 @@
+services:
+  atlantis:
+    image: techblog/atlantis:latest
+    container_name: atlantis
+    ports:
+      - "8080:8080"
+    volumes:
+      # SQLite database: history, clients, channels and the encrypted Deco password.
+      - atlantis-data:/data
+    environment:
+      # Generate once with: docker run --rm techblog/atlantis keygen
+      # Keep it: without the same key, stored credentials can't be decrypted.
+      ATLANTIS_SECRET_KEY: ${ATLANTIS_SECRET_KEY:?set ATLANTIS_SECRET_KEY}
+      ATLANTIS_DECO_HOST: 192.168.68.1
+      ATLANTIS_DECO_EMAIL: ${ATLANTIS_DECO_EMAIL:?set ATLANTIS_DECO_EMAIL}
+      # Needed on the first start only; it is then stored encrypted.
+      ATLANTIS_DECO_PASSWORD: ${ATLANTIS_DECO_PASSWORD:-}
+      ATLANTIS_LOG_LEVEL: info
+    restart: unless-stopped
+
+volumes:
+  atlantis-data:

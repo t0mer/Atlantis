@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -170,6 +171,13 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 
 // readJSON decodes a small JSON body, rejecting unknown fields.
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	// Requiring a JSON content type makes cross-site form posts (text/plain
+	// bodies that happen to parse as JSON) fail, which matters for the
+	// routes without a CSRF token: first-run setup and login.
+	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return false
+	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {

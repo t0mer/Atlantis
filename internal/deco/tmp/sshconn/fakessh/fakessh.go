@@ -28,7 +28,10 @@ type Server struct {
 }
 
 // New starts a server on 127.0.0.1 accepting user/password.
-func New(user, password string) (*Server, error) {
+func New(user, password string) (*Server, error) { return NewAt("127.0.0.1:0", user, password) }
+
+// NewAt is New on a chosen address.
+func NewAt(addr, user, password string) (*Server, error) {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
@@ -37,7 +40,7 @@ func New(user, password string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}

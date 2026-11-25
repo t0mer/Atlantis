@@ -1,0 +1,92 @@
+@import "@fontsource/ibm-plex-sans/latin-400.css";
+@import "@fontsource/ibm-plex-sans/latin-500.css";
+@import "@fontsource/ibm-plex-sans/latin-600.css";
+@import "@fontsource/ibm-plex-sans-hebrew/hebrew-400.css";
+@import "@fontsource/ibm-plex-sans-hebrew/hebrew-600.css";
+@import "tailwindcss";
+
+/* Design tokens: cool mineral surfaces; colour is reserved for state. */
+@theme {
+  --font-sans: "IBM Plex Sans", "IBM Plex Sans Hebrew", system-ui, sans-serif;
+  --color-sea: var(--sea);
+  --color-shoal: var(--shoal);
+  --color-abyss: var(--abyss);
+  --color-drift: var(--drift);
+  --color-line: var(--line);
+  --color-lagoon: var(--lagoon);
+  --color-buoy: var(--buoy);
+  --color-flare: var(--flare);
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+}
+
+:root {
+  --sea: #e7eeee;
+  --shoal: #f7faf9;
+  --abyss: #12293a;
+  --drift: #5e7584;
+  --line: #cfdcdc;
+  --lagoon: #0b7f7c;
+  --buoy: #b97f00;
+  --flare: #c0343f;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --sea: #0d1c26;
+  --shoal: #142836;
+  --abyss: #e3edef;
+  --drift: #8fa6b3;
+  --line: #22394a;
+  --lagoon: #39c2b9;
+  --buoy: #e3b341;
+  --flare: #f06b73;
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--sea);
+  color: var(--abyss);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Names from devices may be Hebrew: dir="auto" isolates their direction,
+   but they keep the column's alignment. Inputs follow the text instead.
+   :where() keeps this below any utility class. */
+@layer base {
+  :where([dir="auto"]:not(input, textarea)) {
+    text-align: left;
+  }
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--lagoon);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* The one motion moment: a marker pulses once when its state changes. */
+@keyframes pulse-once {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.6); }
+  100% { transform: scale(1); }
+}
+.pulse-once {
+  animation: pulse-once 700ms ease-out 1;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse-once { animation: none; }
+}

@@ -139,7 +139,7 @@ func discover(ctx context.Context, addr string) (Info, error) {
 	}
 	serial := uint32(n.Int64())
 	buf := make([]byte, maxReply)
-	var last error = errors.New("tdp: no reply")
+	last := errors.New("tdp: no reply")
 	for range tries {
 		if _, err := conn.Write(request(serial)); err != nil {
 			return Info{}, fmt.Errorf("tdp: %w", err)

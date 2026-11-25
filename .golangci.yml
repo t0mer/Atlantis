@@ -1,0 +1,51 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Errors these return have nothing useful to act on: cleanup on a path
+      # that already failed or finished, CLI output to stdout, or an HTTP
+      # response whose client went away.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (net/http.ResponseWriter).Write
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (net.Conn).Close
+        - (net.Conn).SetDeadline
+        - (net.Conn).SetReadDeadline
+        - (net.PacketConn).Close
+        - (net.PacketConn).SetReadDeadline
+        - (*net.UDPConn).Close
+        - (*net.UDPConn).SetReadDeadline
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*os.File).Close
+        - (*compress/gzip.Reader).Close
+        - (*golang.org/x/crypto/ssh.Client).Close
+        - (golang.org/x/crypto/ssh.Channel).Close
+        - (golang.org/x/crypto/ssh.Conn).Close
+        # Atlantis's own cleanup: closing the store, the Deco session or
+        # the TMP session on shutdown or after a failed setup step.
+        - (*github.com/t0mer/atlantis/internal/store.Store).Close
+        - (*github.com/t0mer/atlantis/internal/session.Manager).Close
+        - (*github.com/t0mer/atlantis/internal/deco/tmp.Session).Close
+  exclusions:
+    paths:
+      - web/node_modules # flatted ships a Go package
+    rules:
+      # Tests and the pretend Decos may ignore errors from setup and cleanup.
+      - path: _test\.go
+        linters: [errcheck]
+      - path: (fake|fakedeco|fakessh|fakecloud)/
+        linters: [errcheck]
+      - path: cmd/atlantis-fake/
+        linters: [errcheck]
+      # The pretend Deco and the tests decrypt what the real Deco would:
+      # PKCS #1 v1.5 is the device's protocol, not a choice.
+      - path: (_test\.go|fakedeco/)
+        text: rsa.DecryptPKCS1v15
+        linters: [staticcheck]

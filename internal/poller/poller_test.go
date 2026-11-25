@@ -182,3 +182,24 @@ func TestOptionalReadFailureKeepsNodes(t *testing.T) {
 		t.Fatal("no previous Wi-Fi to keep")
 	}
 }
+
+// A client that drops out of the device's list is recorded offline once
+// the engine marks it so, rather than leaving a gap in its history.
+func TestAbsentClientRecordedOffline(t *testing.T) {
+	f := &fakeDeco{clients: []deco.WifiClient{{MAC: "c1", Online: true}}}
+	p, st, _, _, _ := setup(t, f)
+	ctx := context.Background()
+	p.Fast(ctx)
+	f.mu.Lock()
+	f.clients = nil
+	f.mu.Unlock()
+	p.Fast(ctx) // miss 1: still online
+	p.Fast(ctx) // miss 2: offline
+	hist, err := st.ClientHistory(ctx, 1, "c1", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) == 0 || hist[len(hist)-1].Online != 0 {
+		t.Fatalf("want a trailing offline sample: %+v", hist)
+	}
+}

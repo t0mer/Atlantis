@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -147,7 +148,7 @@ func (s *Server) since(r *http.Request) (time.Time, error) {
 }
 
 func (s *Server) node(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := pathParam(r, "id")
 	since, err := s.since(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -253,7 +254,7 @@ func (s *Server) clients(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) client(w http.ResponseWriter, r *http.Request) {
-	mac := deco.NormalizeMAC(chi.URLParam(r, "mac"))
+	mac := deco.NormalizeMAC(pathParam(r, "mac"))
 	since, err := s.since(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -278,7 +279,7 @@ func (s *Server) client(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) patchClient(w http.ResponseWriter, r *http.Request) {
-	mac := deco.NormalizeMAC(chi.URLParam(r, "mac"))
+	mac := deco.NormalizeMAC(pathParam(r, "mac"))
 	var body struct {
 		Alias *string  `json:"alias"`
 		Watch *bool    `json:"watch"`
@@ -505,6 +506,17 @@ func (s *Server) createChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, viewChannel(c))
+}
+
+// pathParam returns a decoded path parameter. chi matches on the raw path,
+// so a client that escapes ':' in a MAC (aa%3Abb...) would otherwise get
+// the escaped form.
+func pathParam(r *http.Request, name string) string {
+	v := chi.URLParam(r, name)
+	if u, err := url.PathUnescape(v); err == nil {
+		return u
+	}
+	return v
 }
 
 func channelID(r *http.Request) (int64, error) {

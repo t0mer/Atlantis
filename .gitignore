@@ -69,3 +69,8 @@ npm-debug.log*
 # Built UI (Vite outDir); only the placeholder is tracked
 internal/web/dist/*
 !internal/web/dist/placeholder.html
+
+# Playwright output
+web/test-results/
+web/playwright-report/
+web/*.tsbuildinfo

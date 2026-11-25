@@ -70,15 +70,15 @@ func TestSSHProbeHostKeyTrust(t *testing.T) {
 	defer srv.Close()
 	host, port := srv.Addr()
 	kh := filepath.Join(t.TempDir(), "kh")
-	run := func(accept bool) (error, string) {
+	run := func(accept bool) (string, error) {
 		var out, errOut bytes.Buffer
 		err := runSSHProbe(context.Background(), sshProbeOptions{
 			host: host, port: port, email: "owner@example.com", password: "pw", skipTDP: true,
 			acceptNew: accept, knownHosts: kh, in: strings.NewReader(""), out: &out, errOut: &errOut,
 		})
-		return err, errOut.String()
+		return errOut.String(), err
 	}
-	err, msg := run(false)
+	msg, err := run(false)
 	if err == nil || !strings.Contains(err.Error(), "--accept-new-host-key") || !strings.Contains(msg, "SHA256:") {
 		t.Fatalf("first contact must stop: %v\n%s", err, msg)
 	}
