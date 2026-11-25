@@ -79,8 +79,8 @@ function NetworkPanel({ data, nw, bands }: { data: Wireless; nw: string; bands: 
           <dd>{securityLabel(any.encryption)}</dd>
         </div>
         <div>
-          <dt className="text-xs text-drift">On</dt>
-          <dd>{isOn ? on.map((b) => bandLabel(b)).join(", ") : "Off"}</dd>
+          <dt className="text-xs text-drift">Status</dt>
+          <dd>{isOn ? `On (${on.map((b) => bandLabel(b)).join(", ")})` : "Off"}</dd>
         </div>
       </dl>
       {!canToggle && !canEdit && <p className="mt-3 text-xs text-drift">Atlantis can't change this network yet. Use the Deco app.</p>}

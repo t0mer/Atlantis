@@ -120,7 +120,8 @@ export function useDecoMutations() {
   const done = () => qc.invalidateQueries();
   return {
     connect: useMutation({ mutationFn: (c: DecoConnect) => api<DecoStatus>("/api/v1/deco", { method: "POST", body: c }), onSuccess: done }),
-    change: useMutation({ mutationFn: (c: DecoConnect) => api<DecoStatus>("/api/v1/deco", { method: "PUT", body: c }), onSuccess: done }),
+    // A failed change may have left nothing running: refetch either way.
+    change: useMutation({ mutationFn: (c: DecoConnect) => api<DecoStatus>("/api/v1/deco", { method: "PUT", body: c }), onSettled: done }),
     remove: useMutation({ mutationFn: () => api("/api/v1/deco", { method: "DELETE", body: { confirm: "REMOVE" } }), onSuccess: done }),
   };
 }
