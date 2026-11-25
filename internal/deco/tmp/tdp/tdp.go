@@ -45,15 +45,32 @@ type Info struct {
 	SSHBannerType     int    `json:"ssh_banner_type"`
 	TMPPorts          []int  `json:"tmp_port"`
 	NeedAccountDigest bool   `json:"need_account_digest"`
-	TPAP              *struct {
-		Port int `json:"port"`
-	} `json:"tpap"`
+	TPAP              *TPAP  `json:"tpap"`
 
 	Raw json.RawMessage `json:"-"` // the whole result object
 }
 
-// SSHPort is the port of the SSH-based TMP service: tpap.port, else
-// tmp_port[0], else 22 (TDPMeshDevice.java, TDPGenericDevice.java).
+// TPAP is the reply's "tpap" block, present on Decos that offer TP-Link's
+// TLS transport. Only Port is used; the capability fields are kept raw
+// because only their presence matters (TDPGenericDevice.java).
+type TPAP struct {
+	Port int             `json:"port"`
+	PAKE json.RawMessage `json:"pake"` // SPAKE2+
+	NOC  json.RawMessage `json:"noc"`  // Matter-style operational certificates
+}
+
+func present(r json.RawMessage) bool { return len(r) > 0 && string(r) != "null" }
+
+// SSHAccess reports whether the Deco accepts the SSH transport: no "tpap"
+// block, or one without SPAKE2+ and NOC (TDPGenericDevice.isSsh2AccessEnable).
+// A Deco that offers either only speaks TLS to the app.
+func (i Info) SSHAccess() bool {
+	return i.TPAP == nil || (!present(i.TPAP.PAKE) && !present(i.TPAP.NOC))
+}
+
+// SSHPort is the port of the SSH-based TMP service: tpap.port when the
+// block exists, else tmp_port[0], else 22 (TDPMeshDevice.java,
+// TDPGenericDevice.java).
 func (i Info) SSHPort() int {
 	switch {
 	case i.TPAP != nil && i.TPAP.Port > 0:
