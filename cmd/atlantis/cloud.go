@@ -69,6 +69,9 @@ replaced), as a test fixture.`,
 				return errors.New("no TP-Link ID: use --email or ATLANTIS_CLOUD_EMAIL")
 			}
 			o.password = os.Getenv("ATLANTIS_CLOUD_PASSWORD")
+			if o.caFile == "" {
+				o.caFile = defaultCAFile()
+			}
 			o.in, o.out, o.errOut = os.Stdin, os.Stdout, os.Stderr
 			return runCloudProbe(cmd.Context(), o)
 		},
@@ -79,7 +82,7 @@ replaced), as a test fixture.`,
 	f.BoolVar(&o.dump, "dump", false, "write sanitised response fixtures (needs --site)")
 	f.StringVar(&o.dumpDir, "dump-dir", "internal/deco/cloud/testdata", "directory for --dump fixtures")
 	f.StringVar(&o.terminalFile, "terminal-file", "", "where the installation's terminal ID is kept (default: user config dir)")
-	f.StringVar(&o.caFile, "ca-file", "", "extra PEM root certificates for the cloud TLS connection")
+	f.StringVar(&o.caFile, "ca-file", "", "extra PEM root certificates for the cloud TLS connection (default: "+caFileName+" in the user config dir, if present)")
 	return cmd
 }
 
@@ -103,6 +106,9 @@ func runCloudProbe(ctx context.Context, o cloudProbeOptions) error {
 		}
 		opts.RootCAs = pool
 	}
+	if o.caFile != "" {
+		fmt.Fprintf(o.errOut, "using CA certificates from %s\n", o.caFile)
+	}
 	acct, err := tplinkcloud.New(opts)
 	if err != nil {
 		return fmt.Errorf("%w (set ATLANTIS_CLOUD_ACCESS_KEY and ATLANTIS_CLOUD_SECRET)", err)
@@ -114,6 +120,9 @@ func runCloudProbe(ctx context.Context, o cloudProbeOptions) error {
 		}
 	}
 	if err := cloudLogin(ctx, acct, o, in); err != nil {
+		if strings.Contains(err.Error(), "certificate signed by unknown authority") {
+			return fmt.Errorf("%w\n(TP-Link's cloud uses its own root CA: put it in %s, or pass --ca-file)", err, caFileName)
+		}
 		return err
 	}
 
@@ -304,6 +313,24 @@ func dumpCloudFixtures(dir string, results map[string]json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+// caFileName is the TP-Link cloud CA bundle looked for in the user config
+// dir. TP-Link's cloud chains to its own root, which system stores lack.
+const caFileName = "tplink-cloud-ca.pem"
+
+// defaultCAFile returns <config dir>/atlantis/tplink-cloud-ca.pem if it
+// exists, else "".
+func defaultCAFile() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(dir, "atlantis", caFileName)
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
 }
 
 // loadTerminalID returns the persisted terminal UUID, creating it once. The
