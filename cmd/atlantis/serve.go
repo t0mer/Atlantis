@@ -114,6 +114,9 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 
+	if len(cfg.Server.TrustedProxies) > 0 {
+		log.Warn("server.trusted_proxies is not supported and is ignored")
+	}
 	if err := seedDeco(ctx, cfg, st, box, log); err != nil {
 		return err
 	}
