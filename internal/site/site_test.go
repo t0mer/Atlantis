@@ -127,13 +127,32 @@ func TestConnectStoresAndRuns(t *testing.T) {
 		t.Fatal("the password must be stored sealed")
 	}
 
-	// A change without a password keeps the stored one and the history.
+	// The stored password is never sent to a different address, port or
+	// account: it would hand the TP-Link ID password to that machine.
 	h.st.SaveNodes(ctx, n.ID, []deco.Device{{ID: "m", Master: true, Online: true}})
-	if _, err := h.s.Connect(ctx, Conn{Host: "192.0.2.2", Email: "owner@example.com"}); err != nil {
+	builds := h.builds
+	for _, c := range []Conn{
+		{Host: "192.0.2.66", Email: "owner@example.com"},
+		{Host: "192.0.2.1", Port: 2222, Email: "owner@example.com"},
+		{Host: "192.0.2.1", Email: "other@example.com"},
+		{Host: "192.0.2.1", Email: "owner@example.com", Transport: "luci"},
+	} {
+		if _, err := h.s.Connect(ctx, c); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%+v without a password: %v", c, err)
+		}
+	}
+	if h.builds != builds {
+		t.Fatal("the stored password was sent to a new target")
+	}
+	// The same target without a password keeps it; a new one with a password works.
+	if _, err := h.s.Connect(ctx, Conn{Host: "192.0.2.1", Email: "Owner@Example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.Connect(ctx, Conn{Host: "192.0.2.2", Email: "owner@example.com", Password: "decopass2"}); err != nil {
 		t.Fatal(err)
 	}
 	got, _, _ = h.st.GetNetwork(ctx)
-	if p, _ := h.box.Open(got.PasswordEnc); p != "decopass" || got.Host != "192.0.2.2" || got.ID != n.ID {
+	if p, _ := h.box.Open(got.PasswordEnc); p != "decopass2" || got.Host != "192.0.2.2" || got.ID != n.ID {
 		t.Fatalf("%+v", got)
 	}
 	if nodes, _ := h.st.Nodes(ctx, n.ID); len(nodes) != 1 {

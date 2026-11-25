@@ -25,7 +25,14 @@ export function DecoForm({
   const [port, setPort] = useState(current?.port ? String(current.port) : "");
   const [transport, setTransport] = useState<"ssh" | "luci">(current?.transport ?? "ssh");
   const [advanced, setAdvanced] = useState(!!current?.port || current?.transport === "luci");
-  const keepPassword = !!current?.configured && !current.needs_password;
+  // The saved password is only reused for the same Deco and account; the
+  // server refuses to send it anywhere else.
+  const sameTarget =
+    host.trim() === (current?.host ?? "") &&
+    (port ? Number(port) : 0) === (current?.port ?? 0) &&
+    transport === (current?.transport ?? "ssh") &&
+    email.trim().toLowerCase() === (current?.email ?? "").toLowerCase();
+  const keepPassword = !!current?.configured && !current.needs_password && sameTarget;
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({
@@ -48,7 +55,13 @@ export function DecoForm({
       )}
       <Field
         label="TP-Link ID password"
-        hint={keepPassword ? "Leave empty to keep the saved password. It is stored encrypted and never shown." : "Stored encrypted and never shown again."}
+        hint={
+          keepPassword
+            ? "Leave empty to keep the saved password. It is stored encrypted and never shown."
+            : current?.configured
+              ? "Required for a new address or account. Stored encrypted and never shown again."
+              : "Stored encrypted and never shown again."
+        }
       >
         <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required={!keepPassword} />
       </Field>
@@ -56,8 +69,8 @@ export function DecoForm({
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Connection">
             <select className={`${selectClass} w-full`} value={transport} onChange={(e) => setTransport(e.target.value as "ssh" | "luci")}>
-              <option value="ssh">Deco app protocol (SSH)</option>
-              <option value="luci">Local web page (older firmware)</option>
+              <option value="ssh">Deco app (SSH)</option>
+              <option value="luci">Web page (older)</option>
             </select>
           </Field>
           {transport === "ssh" && (

@@ -19,10 +19,13 @@ func TestDecoLifecycle(t *testing.T) {
 	if code, _, _ := e.do(t, "POST", "/api/v1/deco", `{"host":"192.0.2.5","email":"o@example.com","password":"x"}`, true); code != 409 {
 		t.Fatalf("adding a second Deco: %d", code)
 	}
-	if code, _, _ := e.do(t, "PUT", "/api/v1/deco", `{"host":"192.0.2.1","email":"o@example.com"}`, false); code != 403 {
+	if code, _, _ := e.do(t, "PUT", "/api/v1/deco", `{"host":"192.0.2.1","email":"owner@example.com"}`, false); code != 403 {
 		t.Fatalf("changes need the CSRF token: %d", code)
 	}
-	code, m, _ = e.do(t, "PUT", "/api/v1/deco", `{"host":"192.0.2.7","email":"o@example.com"}`, true)
+	if code, _, _ := e.do(t, "PUT", "/api/v1/deco", `{"host":"192.0.2.7","email":"owner@example.com"}`, true); code != 400 {
+		t.Fatalf("a new address must need the password again: %d", code)
+	}
+	code, m, _ = e.do(t, "PUT", "/api/v1/deco", `{"host":"192.0.2.7","email":"o@example.com","password":"decopass"}`, true)
 	if code != 200 || m["host"] != "192.0.2.7" {
 		t.Fatalf("%d %v", code, m)
 	}

@@ -224,7 +224,14 @@ func (s *Site) Connect(ctx context.Context, c Conn) (store.Network, error) {
 	password := c.Password
 	if have {
 		n.ID, n.Name = cur.ID, cur.Name
+		sameTarget := cur.Host == n.Host && cur.Port == n.Port && cur.Transport == n.Transport && strings.EqualFold(cur.Email, n.Email)
 		if password == "" {
+			// The stored password is only ever sent to the device it was
+			// entered for; a new target needs it typed again, so the saved
+			// credential cannot be redirected to another machine.
+			if !sameTarget {
+				return store.Network{}, fmt.Errorf("%w: enter the password to connect to a different address or account", ErrInvalid)
+			}
 			if password, err = s.d.Box.Open(cur.PasswordEnc); err != nil {
 				return store.Network{}, err
 			}
