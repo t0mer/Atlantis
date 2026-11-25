@@ -284,16 +284,25 @@ func (s *Site) check(ctx context.Context, n *store.Network, password string) err
 func explain(err error) error {
 	switch {
 	case errors.Is(err, deco.ErrWrongPassword), errors.Is(err, deco.ErrAuthFailed):
-		return fmt.Errorf("%w: the Deco rejected the TP-Link ID email or password", deco.ErrWrongPassword)
+		return userError{"The Deco rejected the TP-Link ID email or password.", deco.ErrWrongPassword}
 	case errors.Is(err, deco.ErrOtherAdmin):
-		return fmt.Errorf("%w: log out of the Deco app on other devices and try again", deco.ErrOtherAdmin)
+		return userError{"Another admin is signed in to the Deco. Sign out of the Deco app on other devices and try again.", deco.ErrOtherAdmin}
 	case errors.Is(err, deco.ErrCertChanged):
-		return fmt.Errorf("%w: the Deco presented a different key than the one trusted for this address", deco.ErrCertChanged)
+		return userError{"The Deco presented a different security key than the one trusted for this address.", deco.ErrCertChanged}
 	case errors.Is(err, ErrTLSOnly), errors.Is(err, ErrNotMain):
 		return err
 	}
-	return fmt.Errorf("%w: %v", ErrUnreachable, err)
+	return userError{"Could not reach the Deco at that address: " + err.Error(), ErrUnreachable}
 }
+
+// userError reads as msg and matches kind with errors.Is.
+type userError struct {
+	msg  string
+	kind error
+}
+
+func (e userError) Error() string { return e.msg }
+func (e userError) Unwrap() error { return e.kind }
 
 // Remove stops the connection and deletes the site with its history.
 func (s *Site) Remove(ctx context.Context) error {
