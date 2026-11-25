@@ -212,3 +212,22 @@ func TestComponents(t *testing.T) {
 		t.Fatalf("%v", c)
 	}
 }
+
+// Shape seen live on a Deco M5 (values replaced): the level is per band
+// under linked_device_info, and wire_type is set.
+func TestParseClientLiveShape(t *testing.T) {
+	list := `{"client_list":[{"mac":"AA-BB-CC-DD-EE-10","ip":"192.0.2.20","name":"` + b64s("Tablet") + `","client_type":"tablet",
+	  "online":true,"interface":"main","wire_type":"wireless","access_host":"1","client_mesh":true,
+	  "linked_device_info":{"connection_type":["band2_4"],"device_id":"m1","signal_level":{"band2_4":2,"band5":0}}}]}`
+	cs, err := parseClients(json.RawMessage(list), nil, "m1")
+	if err != nil || len(cs) != 1 {
+		t.Fatalf("%+v %v", cs, err)
+	}
+	if c := cs[0]; c.SignalLevel != 2 || c.Band != "band2_4" || c.Wired || c.NodeID != "m1" || c.Name != "Tablet" {
+		t.Fatalf("%+v", c)
+	}
+	wired, _ := parseClients(json.RawMessage(`{"client_list":[{"mac":"AA-BB-CC-DD-EE-11","wire_type":"wired","linked_device_info":{"connection_type":[]}}]}`), nil, "m1")
+	if !wired[0].Wired {
+		t.Fatal("wire_type wired")
+	}
+}

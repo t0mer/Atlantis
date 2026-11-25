@@ -203,9 +203,11 @@ type wireClient struct {
 	ClientType  string        `json:"client_type"`
 	Online      deco.FlexBool `json:"online"`
 	Interface   string        `json:"interface"`
+	WireType    string        `json:"wire_type"`
 	Linked      struct {
-		DeviceID       string  `json:"device_id"`
-		ConnectionType strList `json:"connection_type"`
+		DeviceID       string                  `json:"device_id"`
+		ConnectionType strList                 `json:"connection_type"`
+		SignalLevel    map[string]deco.FlexInt `json:"signal_level"`
 	} `json:"linked_device_info"`
 	SignalLevel deco.FlexInt `json:"signal_level"`
 	UpSpeed     deco.FlexInt `json:"up_speed"`
@@ -260,6 +262,17 @@ func parseClients(raw, speeds json.RawMessage, masterID string) ([]deco.WifiClie
 				c.Wired = true
 			case strings.HasPrefix(l, "band") && c.Band == "":
 				c.Band = deco.NormalizeBand(l)
+			}
+		}
+		if strings.EqualFold(w.WireType, "wired") {
+			c.Wired = true
+		}
+		if c.SignalLevel == 0 && c.Band != "" {
+			// Live firmware reports per-band levels under linked_device_info.
+			for band, v := range w.Linked.SignalLevel {
+				if deco.NormalizeBand(band) == c.Band {
+					c.SignalLevel = int(v)
+				}
 			}
 		}
 		if c.Wired {
