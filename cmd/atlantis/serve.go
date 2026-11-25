@@ -102,19 +102,8 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer st.Close()
 
-	// A Deco given in the configuration is stored as the site, as before;
-	// without one, it is added from the UI.
-	if cfg.Deco.Host != "" {
-		sealed := ""
-		if cfg.Deco.Password != "" {
-			if sealed, err = box.Seal(cfg.Deco.Password); err != nil {
-				return err
-			}
-		}
-		if _, err := st.EnsureNetwork(ctx, store.Network{Host: cfg.Deco.Host, Port: cfg.Deco.Port, Transport: cfg.Deco.Transport, Email: cfg.Deco.Email,
-			PasswordEnc: sealed, HostKey: cfg.Deco.HostKey, TLSPin: cfg.Deco.TLSPin}); err != nil {
-			return err
-		}
+	if err := seedDeco(ctx, cfg, st, box, log); err != nil {
+		return err
 	}
 
 	var m *metrics.Metrics
@@ -179,5 +168,40 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	defer cancel()
 	_ = httpSrv.Shutdown(sctx)
 	wg.Wait()
+	return nil
+}
+
+// seedDeco stores the Deco given in the configuration, if any, but only
+// while none is stored: once it exists, the UI owns the connection, so a
+// restart never undoes a change made there (or pairs one Deco's address
+// with another's pinned key). The one exception is a stored Deco that still
+// has no password (seeded without one): the configured password fills it in.
+func seedDeco(ctx context.Context, cfg *config.Config, st *store.Store, box *secret.Box, log *slog.Logger) error {
+	if cfg.Deco.Host == "" {
+		return nil
+	}
+	cur, have, err := st.GetNetwork(ctx)
+	if err != nil {
+		return err
+	}
+	sealed := ""
+	if cfg.Deco.Password != "" {
+		if sealed, err = box.Seal(cfg.Deco.Password); err != nil {
+			return err
+		}
+	}
+	switch {
+	case !have || cur.Host == "": // nothing stored, or a placeholder without an address
+		n := store.Network{ID: cur.ID, Host: cfg.Deco.Host, Port: cfg.Deco.Port, Transport: cfg.Deco.Transport, Email: cfg.Deco.Email,
+			PasswordEnc: sealed, HostKey: cfg.Deco.HostKey, TLSPin: cfg.Deco.TLSPin}
+		_, err = st.SaveNetwork(ctx, n)
+		return err
+	case cur.PasswordEnc == "" && sealed != "" && cur.Host == cfg.Deco.Host:
+		cur.PasswordEnc = sealed
+		_, err = st.SaveNetwork(ctx, cur)
+		return err
+	case cur.Host != cfg.Deco.Host || cur.Email != cfg.Deco.Email:
+		log.Warn("deco.* in the configuration is ignored: a Deco is already stored; change it in Settings", "stored", cur.Host, "configured", cfg.Deco.Host)
+	}
 	return nil
 }
