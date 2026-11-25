@@ -216,8 +216,8 @@ A few things are needed before the web UI runs. Each has a working default, and 
 | Key | Environment variable | Flag | Default | Description |
 |---|---|---|---|---|
 | `server.listen` | `ATLANTIS_SERVER_LISTEN` | `--server-listen` | `:8080` | Address and port to listen on. |
-| `store.path` | `ATLANTIS_STORE_PATH` | `--store-path` | `atlantis.db` | The database file, relative to the working directory (`/data` in the image). The key file is kept next to it. |
-| `secret_key` | `ATLANTIS_SECRET_KEY` | | `secret.key` next to the database | Base64 of 32 bytes, from `atlantis keygen`. Set it to keep the key outside the data directory; it then wins over the key file. |
+| `store.path` | `ATLANTIS_STORE_PATH` | `--store-path` | `atlantis.db` | The database file, relative to the working directory (`/data` in the image). The key file is kept next to it. If there is no `atlantis.db` in the working directory but `/data/atlantis.db` exists (the old default), that one is used. |
+| `secret_key` | `ATLANTIS_SECRET_KEY` | | `secret.key` next to the database | Base64 of 32 bytes, from `atlantis keygen`. Set it to keep the key outside the data directory; it then wins over the key file. Atlantis refuses to start with a key that doesn't open the passwords already stored. |
 | `log.format` | `ATLANTIS_LOG_FORMAT` | | `json` | `json` or `text`. |
 
 Precedence: flag, then environment, then YAML, then the default.
@@ -372,11 +372,12 @@ Run any command with `--help` for all its flags.
 - Connecting a Deco signs in once to check the password and never retries a rejected one. After five rejected passwords in 15 minutes, Atlantis waits so the TP-Link ID isn't locked.
 - Wi-Fi changes are limited to the ones tested on a real Deco, and every change and connection change is written to the audit log (without passwords).
 - Atlantis's own account uses a bcrypt password, an HttpOnly SameSite=Strict session cookie, CSRF tokens on changes, and a lockout after repeated failed sign-ins.
-- Expose Atlantis only on your LAN or behind a reverse proxy with HTTPS. Set the public address (**Settings → Advanced**) to the `https://` address so the cookie is marked `Secure`.
+- Expose Atlantis only on your LAN or behind a reverse proxy with HTTPS. Set the public address (**Settings → Advanced**) to the `https://` address: the sign-in cookie is then marked `Secure` for requests that arrive over HTTPS (directly, or with `X-Forwarded-Proto: https` from the proxy). Plain HTTP on the LAN keeps working.
 - The database holds your network's history and the encrypted credentials. Back up the data directory (database and `secret.key`) as a whole.
 
 ## Troubleshooting
 
+- **"The encryption key ... does not match the passwords stored in ...".** The key in use (`ATLANTIS_SECRET_KEY` or `secret.key`) is not the one the database was set up with, for example after restoring an older backup. Start Atlantis with the original key.
 - **"... holds encrypted passwords, but there is no ATLANTIS_SECRET_KEY and no secret.key".** The database was created with a key that is not available now (for example, an older install that used `ATLANTIS_SECRET_KEY`, started without it). Set `ATLANTIS_SECRET_KEY` to that key. Atlantis never makes a new key for such a database, because the stored passwords could not be read with it.
 - **"The Deco app or another admin is signed in; retrying shortly".** The Deco app (or a browser) holds the Deco's single admin session. Close the app, or wait: Atlantis backs off and tries again. Use **Release for the app** whenever you need the app.
 - **"The Deco rejected the password".** Atlantis stops trying, to avoid locking the account. Enter the right TP-Link ID password in **Settings → Deco → Change connection** (or on the Reconnect page).
