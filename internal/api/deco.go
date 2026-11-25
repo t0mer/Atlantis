@@ -15,6 +15,7 @@ const decoPasswordKey = "deco-password"
 type decoView struct {
 	Configured    bool            `json:"configured"`
 	Running       bool            `json:"running"`
+	Changing      bool            `json:"changing"` // a change is being checked; the old connection is stopped meanwhile
 	NeedsPassword bool            `json:"needs_password"`
 	Host          string          `json:"host,omitempty"`
 	Port          int             `json:"port,omitempty"`
@@ -30,7 +31,7 @@ func (s *Server) decoStatus(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	v := decoView{Configured: ok}
+	v := decoView{Configured: ok, Changing: s.Site.Changing()}
 	if ok {
 		v.Host, v.Port, v.Transport, v.Email, v.HostKey = n.Host, n.Port, n.Transport, n.Email, n.HostKey
 		v.NeedsPassword = n.PasswordEnc == "" || n.Host == ""

@@ -70,6 +70,8 @@ func (s *Site) SetPoll(ctx context.Context, p Poll) error {
 		return err
 	}
 	p.FromUI = true
+	s.pollMu.Lock() // what is stored and what runs stay the same
+	defer s.pollMu.Unlock()
 	if err := s.d.Store.SetSetting(ctx, pollKey, p); err != nil {
 		return err
 	}

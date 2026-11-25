@@ -32,7 +32,9 @@ function Gate({ children }: { children: (user?: string) => ReactNode }) {
 function DecoGate({ children }: { children: ReactNode }) {
   const { data, isLoading } = useDeco();
   if (isLoading) return null;
-  if (data && !data.running) return <Connect deco={data} />;
+  // While a stored Deco's connection is being changed it is briefly not
+  // running; keep the app (and the dialog doing the change) on screen.
+  if (data && !data.running && !(data.configured && data.changing)) return <Connect deco={data} />;
   return <>{children}</>;
 }
 

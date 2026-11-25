@@ -43,6 +43,7 @@ components:
       properties:
         configured: { type: boolean, description: A Deco is stored }
         running: { type: boolean, description: Atlantis is connected and polling it }
+        changing: { type: boolean, description: A change of the connection is being checked; polling is stopped meanwhile }
         needs_password: { type: boolean, description: Stored without a password; add it with PUT /api/v1/deco }
         host: { type: string }
         port: { type: integer, description: SSH port; 0 = discovered }

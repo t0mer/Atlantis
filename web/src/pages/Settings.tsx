@@ -370,7 +370,7 @@ function RefreshPanel({ s }: { s: SettingsData }) {
         </Field>
         <Field label="Mark a device offline after" hint="Missed device checks in a row.">
           <select className={`${selectClass} w-full`} value={misses} onChange={(e) => setMisses(Number(e.target.value))}>
-            {[1, 2, 3, 4, 5].map((n) => (
+            {[...new Set([1, 2, 3, 4, 5, misses])].sort((a, b) => a - b).map((n) => (
               <option key={n} value={n}>
                 {n} missed {n === 1 ? "check" : "checks"}
               </option>

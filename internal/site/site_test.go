@@ -252,3 +252,24 @@ func TestConnValidation(t *testing.T) {
 		t.Fatal("invalid settings must never reach the Deco")
 	}
 }
+
+// A change that fails after the browser gave up (cancelled request) must
+// still bring the previous connection back.
+func TestFailedChangeFromACancelledRequestRestarts(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.s.Connect(context.Background(), conn); err != nil {
+		t.Fatal(err)
+	}
+	h.failHost = "192.0.2.9"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := h.s.Connect(ctx, Conn{Host: "192.0.2.9", Email: "owner@example.com", Password: "other"}); err == nil {
+		t.Fatal("expected the check to fail")
+	}
+	if run := h.s.Current(); run == nil || run.Network.Host != "192.0.2.1" {
+		t.Fatalf("the previous connection must be running again: %+v", run)
+	}
+	if h.s.Changing() {
+		t.Fatal("still marked as changing")
+	}
+}

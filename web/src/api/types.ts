@@ -225,6 +225,7 @@ export interface AuthStatus {
 export interface DecoStatus {
   configured: boolean;
   running: boolean;
+  changing: boolean;
   needs_password: boolean;
   host?: string;
   port?: number;

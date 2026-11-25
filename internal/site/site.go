@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/t0mer/atlantis/internal/config"
@@ -86,10 +87,12 @@ type Site struct {
 	d    Deps
 	root context.Context
 
-	op  sync.Mutex // serialises Start, Connect, Remove and Close
-	mu  sync.RWMutex
-	run *Run
+	op       sync.Mutex // serialises Start, Connect, Remove and Close
+	mu       sync.RWMutex
+	run      *Run
+	changing atomic.Bool // a stored Deco's connection is being changed
 
+	pollMu sync.Mutex // serialises SetPoll
 	poll Poll
 }
 
@@ -128,6 +131,10 @@ func (s *Site) Start(ctx context.Context) error {
 }
 
 func (s *Site) start(ctx context.Context, n store.Network, password string, keys *hostKeys) error {
+	// A run outlives the request that starts it: discovery and setup must
+	// not fail because a browser tab closed or a request timed out.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
 	saveTLSPin := func(fp string) {
 		if err := s.d.Store.SetTLSPin(context.Background(), n.ID, fp); err != nil {
 			s.d.Log.Error("saving the TLS pin", "err", err)
@@ -244,23 +251,51 @@ func (s *Site) Connect(ctx context.Context, c Conn) (store.Network, error) {
 		return store.Network{}, fmt.Errorf("%w: the password is required", ErrInvalid)
 	}
 
-	prev := s.Current()
+	if have {
+		s.changing.Store(true)
+		defer s.changing.Store(false)
+	}
+	wasRunning := s.Current() != nil
 	s.stop(ctx)
-	if err := s.check(ctx, &n, password); err != nil {
-		if prev != nil {
-			if rerr := s.start(ctx, prev.Network, mustOpen(s.d.Box, prev.Network.PasswordEnc), prev.keys); rerr != nil {
-				s.d.Log.Error("restarting the previous Deco connection", "err", rerr)
-			}
+	fail := func(err error) (store.Network, error) {
+		if wasRunning {
+			s.restartStored(ctx)
 		}
 		return store.Network{}, err
 	}
+	if err := s.check(ctx, &n, password); err != nil {
+		return fail(err)
+	}
 	if n.PasswordEnc, err = s.d.Box.Seal(password); err != nil {
-		return store.Network{}, err
+		return fail(err)
 	}
-	if n, err = s.d.Store.SaveNetwork(ctx, n); err != nil {
-		return store.Network{}, err
+	saved, err := s.d.Store.SaveNetwork(context.WithoutCancel(ctx), n)
+	if err != nil {
+		return fail(err)
 	}
-	return n, s.start(ctx, n, password, newHostKeys(s.d.Store, n))
+	return saved, s.start(ctx, saved, password, newHostKeys(s.d.Store, saved))
+}
+
+// Changing reports whether a stored Deco's connection is being changed
+// (its run is stopped while the new settings are checked).
+func (s *Site) Changing() bool { return s.changing.Load() }
+
+// restartStored runs the site as stored again, after a change failed. It
+// reads the store rather than the old run so pins learned meanwhile hold.
+func (s *Site) restartStored(ctx context.Context) {
+	ctx = context.WithoutCancel(ctx)
+	n, ok, err := s.d.Store.GetNetwork(ctx)
+	if err != nil || !ok {
+		s.d.Log.Error("restarting the previous Deco connection", "err", err)
+		return
+	}
+	password, err := s.d.Box.Open(n.PasswordEnc)
+	if err == nil {
+		err = s.start(ctx, n, password, newHostKeys(s.d.Store, n))
+	}
+	if err != nil {
+		s.d.Log.Error("restarting the previous Deco connection", "err", err)
+	}
 }
 
 // check logs in to the Deco with n and reads its nodes, then logs out. A
@@ -381,11 +416,6 @@ func (c Conn) validate() error {
 		return fmt.Errorf("%w: %s", ErrInvalid, strings.Join(bad, "; "))
 	}
 	return nil
-}
-
-func mustOpen(b *secret.Box, sealed string) string {
-	p, _ := b.Open(sealed)
-	return p
 }
 
 // hostKeys keeps the SSH host-key pin and lets a new key be accepted: after
