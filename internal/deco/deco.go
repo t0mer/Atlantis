@@ -230,6 +230,17 @@ func (e invalidError) Unwrap() error { return ErrInvalid }
 // Invalid returns an error matching ErrInvalid with a plain message.
 func Invalid(format string, a ...any) error { return invalidError{fmt.Sprintf(format, a...)} }
 
+// ErrNotFound means the device does not list the thing asked for.
+var ErrNotFound = errors.New("deco: not found on the device")
+
+// ClientRenamer is implemented by transports that can rename a client on
+// the Deco (the name the Deco app shows).
+type ClientRenamer interface {
+	RenameClient(ctx context.Context, mac, name string) error
+	// CanRenameClients reports whether renaming is verified on hardware.
+	CanRenameClients() bool
+}
+
 // ErrNotVerified means a write has not been verified on a real Deco yet,
 // so Atlantis does not send it.
 var ErrNotVerified = errors.New("deco: this change has not been verified on a Deco yet")

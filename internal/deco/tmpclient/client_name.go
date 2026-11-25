@@ -1,0 +1,112 @@
+package tmpclient
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/t0mer/atlantis/internal/deco"
+	"github.com/t0mer/atlantis/internal/deco/tmp"
+)
+
+// clientRenameVerified is set once `atlantis ssh client-rename-probe` has
+// passed on a real Deco (record: testdata/m5/client_rename_probe.json).
+var clientRenameVerified = false
+
+// renameFields are the fields the app's rename screen copies from the
+// current client into the sparse entry it sends (ClientNameSettingActivity);
+// each is sent only if the device reported it.
+var renameFields = []string{"client_type", "enable_priority", "remain_time", "space_id"}
+
+// CanRenameClients reports whether renaming is verified on hardware.
+func (c *Client) CanRenameClients() bool { return clientRenameVerified }
+
+// RenameClient sets the client's name on the Deco, as the Deco app does.
+func (c *Client) RenameClient(ctx context.Context, mac, name string) error {
+	if !clientRenameVerified {
+		return fmt.Errorf("%w: renaming a client", deco.ErrNotVerified)
+	}
+	return c.renameClient(ctx, mac, name, true)
+}
+
+// ProbeRenameClient is RenameClient without the verified check, with the
+// "set by the user" flag given explicitly (to restore an original). It
+// exists for `atlantis ssh client-rename-probe`; nothing else may call it.
+func (c *Client) ProbeRenameClient(ctx context.Context, mac, name string, userSet bool) error {
+	return c.renameClient(ctx, mac, name, userSet)
+}
+
+// ClientEntry returns the device's entry for mac from CLIENT_LIST_GET.
+func (c *Client) ClientEntry(ctx context.Context, mac string) (deco.Obj, error) {
+	raw, err := c.Request(ctx, tmp.OpClientListGet, nil)
+	if err != nil {
+		return nil, err
+	}
+	top, _ := deco.ParseObj(raw)
+	want := deco.NormalizeMAC(mac)
+	for _, e := range top.Objs("client_list") {
+		if deco.NormalizeMAC(e.Str("mac")) == want {
+			return e, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: the Deco does not list %s right now", deco.ErrNotFound, want)
+}
+
+// ValidateClientName checks a name before it is sent.
+func ValidateClientName(name string) error {
+	if n := len(name); n < 1 || n > 64 || !utf8.ValidString(name) {
+		return deco.Invalid("a device name must be 1-64 bytes of text (got %d bytes)", n)
+	}
+	for _, r := range name {
+		if !unicode.IsPrint(r) {
+			return deco.Invalid("a device name must not contain control characters")
+		}
+	}
+	return nil
+}
+
+// renameEntry is the sparse client entry the app sends to rename.
+func renameEntry(cur deco.Obj, name string, userSet bool) map[string]any {
+	e := map[string]any{
+		"mac":                cur.Str("mac"), // exactly as the device reports it
+		"name":               base64.StdEncoding.EncodeToString([]byte(name)),
+		"user_set_name_type": userSet,
+	}
+	for _, k := range renameFields {
+		if v, ok := cur[k]; ok {
+			e[k] = json.RawMessage(v)
+		}
+	}
+	return e
+}
+
+func (c *Client) renameClient(ctx context.Context, mac, name string, userSet bool) error {
+	if err := ValidateClientName(name); err != nil {
+		return err
+	}
+	cur, err := c.ClientEntry(ctx, mac)
+	if err != nil {
+		return err
+	}
+	oldName := b64Text(cur.Str("name"))
+	if _, err := c.request(ctx, tmp.OpClientListSet, map[string]any{"client_list": []any{renameEntry(cur, name, userSet)}}); err != nil {
+		return fmt.Errorf("renaming on the Deco: %w", err)
+	}
+	after, err := c.ClientEntry(ctx, mac)
+	if err == nil && b64Text(after.Str("name")) == name {
+		return nil
+	}
+	// Not confirmed: put the previous name back, whatever the caller does.
+	undo := map[string]any{"client_list": []any{renameEntry(cur, oldName, true)}}
+	if _, rerr := c.request(context.WithoutCancel(ctx), tmp.OpClientListSet, undo); rerr != nil {
+		return fmt.Errorf("the Deco accepted the new name but does not show it, and restoring the old name failed: %v", rerr)
+	}
+	if err != nil {
+		return fmt.Errorf("the rename was sent, but reading it back failed (%w); the old name was restored", err)
+	}
+	return errors.New("the Deco accepted the new name but does not show it; the old name was restored")
+}

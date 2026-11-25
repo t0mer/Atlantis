@@ -16,7 +16,8 @@ const (
 // Write opcodes. Each is allowed only through its dedicated, validated
 // client method; Raw and the probes never send them.
 const (
-	OpWirelessSet Opcode = 0x4008
+	OpWirelessSet   Opcode = 0x4008
+	OpClientListSet Opcode = 0x4013
 )
 
 // Read-only business opcodes.
@@ -46,6 +47,7 @@ var opNames = map[Opcode]string{
 	OpMLONetworkGet:            "MLO_NETWORK_GET",
 	OpDeviceResourceListGet:    "DEVICE_RESOURCE_LIST_GET",
 	OpWirelessSet:              "WIRELESS_SET",
+	OpClientListSet:            "CLIENT_LIST_SET",
 }
 
 func (o Opcode) String() string {
@@ -68,10 +70,13 @@ var allowed = map[Opcode]bool{
 	// WIRELESS_SET: only through tmpclient.SetNetwork, which sends just the
 	// network fields listed in its verifiedWrites (proven on a Deco M5).
 	OpWirelessSet: true,
+	// CLIENT_LIST_SET: only through tmpclient.RenameClient, which sends one
+	// client's name the way the app's rename screen does.
+	OpClientListSet: true,
 }
 
 // writes are the allowed opcodes that change device state.
-var writes = map[Opcode]bool{OpWirelessSet: true}
+var writes = map[Opcode]bool{OpWirelessSet: true, OpClientListSet: true}
 
 // IsWrite reports whether op changes device state.
 func IsWrite(op Opcode) bool { return writes[op] }
