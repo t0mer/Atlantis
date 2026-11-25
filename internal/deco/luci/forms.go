@@ -2,11 +2,7 @@ package luci
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"regexp"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/deco/fixture"
@@ -15,37 +11,14 @@ import (
 // Read-only forms (CLAUDE.md §4.1.6). Write forms are added only after the
 // Phase 0 spike confirms them on hardware.
 
+var _ deco.Client = (*Client)(nil)
+
+// Name and MAC helpers are shared with the other transports.
 var (
-	_ deco.Client = (*Client)(nil)
-
-	errorDecodingRE = regexp.MustCompile(`^<Error Decoding (.*)>$`)
+	decodeName   = deco.DecodeName
+	normalizeMAC = deco.NormalizeMAC
+	wireMAC      = deco.WireMAC
 )
-
-// decodeName turns a device-provided name into UTF-8. Names are base64; if
-// base64 decoding fails the raw value is used, with legacy "<Error Decoding X>"
-// wrappers unwrapped to X.
-func decodeName(s string) string {
-	if s == "" {
-		return ""
-	}
-	if b, err := base64.StdEncoding.DecodeString(s); err == nil && utf8.Valid(b) {
-		return string(b)
-	}
-	if m := errorDecodingRE.FindStringSubmatch(s); m != nil {
-		return m[1]
-	}
-	return s
-}
-
-// normalizeMAC converts the wire form AA-BB-CC-DD-EE-FF to aa:bb:cc:dd:ee:ff.
-func normalizeMAC(s string) string {
-	return strings.ToLower(strings.ReplaceAll(s, "-", ":"))
-}
-
-// wireMAC converts aa:bb:cc:dd:ee:ff to the device's AA-BB-CC-DD-EE-FF form.
-func wireMAC(s string) string {
-	return strings.ToUpper(strings.ReplaceAll(s, ":", "-"))
-}
 
 type wireDevice struct {
 	MAC            string `json:"mac"`

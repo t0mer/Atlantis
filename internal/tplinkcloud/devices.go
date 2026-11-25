@@ -2,12 +2,12 @@ package tplinkcloud
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/t0mer/atlantis/internal/deco"
 )
 
 // DecoDeviceType is the cloud device type of Deco units.
@@ -218,29 +218,10 @@ func buildSites(devs []cloudDevice, feats map[string]feature) []Site {
 	return sites
 }
 
-// decodeB64 decodes base64 UTF-8 text, returning s unchanged if it is not.
-func decodeB64(s string) string {
-	if b, err := base64.StdEncoding.DecodeString(s); err == nil && utf8.Valid(b) && len(b) > 0 {
-		return string(b)
-	}
-	return s
-}
-
-// normalizeMAC turns AABBCCDDEEFF or AA-BB-CC-DD-EE-FF into aa:bb:cc:dd:ee:ff.
-func normalizeMAC(s string) string {
-	h := strings.ToLower(strings.NewReplacer("-", "", ":", "").Replace(s))
-	if len(h) != 12 {
-		return strings.ToLower(s)
-	}
-	var b strings.Builder
-	for i := 0; i < 12; i += 2 {
-		if i > 0 {
-			b.WriteByte(':')
-		}
-		b.WriteString(h[i : i+2])
-	}
-	return b.String()
-}
+var (
+	decodeB64    = deco.DecodeName
+	normalizeMAC = deco.NormalizeMAC
+)
 
 func firstNonEmpty(v ...string) string {
 	for _, s := range v {
