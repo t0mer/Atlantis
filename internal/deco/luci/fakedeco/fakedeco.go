@@ -46,6 +46,7 @@ type Fake struct {
 	redirectToTLS bool
 	results       map[string]any
 	pages         map[string]string
+	rootRedirect  string
 }
 
 type key struct{ k, i string }
@@ -67,6 +68,8 @@ func New(password string) (*Fake, error) {
 		seq:      7001,
 		results:  defaultResults(),
 		pages:    defaultPages(),
+
+		rootRedirect: "/webpages/index.html",
 	}
 	f.Plain = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -109,6 +112,8 @@ func (f *Fake) SetBusy(v bool)              { f.busy = v }
 func (f *Fake) SetRedirectToTLS(v bool)     { f.redirectToTLS = v }
 func (f *Fake) SetExpireAfter(n int)        { f.expireIn = n }
 func (f *Fake) SetResult(key string, v any) { f.results[key] = v }
+func (f *Fake) SetPage(path, body string)   { f.pages[path] = body }
+func (f *Fake) SetRootRedirect(loc string)  { f.rootRedirect = loc }
 
 // TLSFingerprint returns the hex SHA-256 of the TLS leaf certificate.
 func (f *Fake) TLSFingerprint() string {
@@ -131,7 +136,7 @@ var led = "?form=led";`,
 
 func (f *Fake) servePage(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" {
-		w.Header().Set("Location", "/webpages/index.html")
+		w.Header().Set("Location", f.rootRedirect)
 		w.WriteHeader(http.StatusFound)
 		return
 	}

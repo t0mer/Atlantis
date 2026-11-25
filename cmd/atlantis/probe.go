@@ -189,7 +189,10 @@ func writeFormsDoc(ctx context.Context, c *luci.Client, dir string, devices []de
 	if err := os.WriteFile(path, []byte(rep.Markdown(model, fw, verified)), 0o644); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "wrote %s (%d forms from %d web UI files)\n", path, len(rep.Forms), rep.Fetched)
+	fmt.Fprintf(os.Stderr, "wrote %s (%d forms from %d web UI files, %d failed)\n", path, len(rep.Forms), rep.Fetched, rep.Failed)
+	for _, e := range rep.FailSamples {
+		fmt.Fprintf(os.Stderr, "  fetch failed: %s\n", e)
+	}
 	return nil
 }
 

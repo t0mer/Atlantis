@@ -2,8 +2,11 @@ package luci
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/t0mer/atlantis/internal/deco/luci/fakedeco"
 )
 
 func TestDiscoverFormsCrawlsWebUI(t *testing.T) {
@@ -59,5 +62,47 @@ func TestResolveSameHostRejectsOffHost(t *testing.T) {
 		if _, ok := c.resolveSameHost("/webpages/index.html", ref); ok != want {
 			t.Errorf("resolveSameHost(%q) ok = %v, want %v", ref, ok, want)
 		}
+	}
+}
+
+func TestDiscoverCountsFailedFetchesTowardBound(t *testing.T) {
+	f := newFake(t)
+	var refs strings.Builder
+	for i := 0; i < maxDiscoverFiles*2; i++ {
+		fmt.Fprintf(&refs, "load(\"missing%d.js\");\n", i)
+	}
+	f.Update(func(f *fakedeco.Fake) { f.SetPage("/webpages/index.html", "<script>"+refs.String()+"</script>") })
+	c, _ := New(f.Plain.URL, "secret", Options{})
+	rep, err := c.DiscoverForms(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total := rep.Fetched + rep.Failed; total > maxDiscoverFiles {
+		t.Fatalf("crawl made %d attempts, bound is %d", total, maxDiscoverFiles)
+	}
+	if len(rep.FailSamples) == 0 || len(rep.FailSamples) > maxFailSamples {
+		t.Fatalf("fail samples = %d, want 1..%d", len(rep.FailSamples), maxFailSamples)
+	}
+}
+
+func TestDiscoverDoesNotMoveAPIBaseOnWebRedirect(t *testing.T) {
+	f := newFake(t)
+	f.Update(func(f *fakedeco.Fake) { f.SetRootRedirect("https://127.0.0.1:4443/webpages/index.html") })
+	c, _ := New(f.Plain.URL, "secret", Options{})
+	before := c.BaseURL()
+	if _, err := c.DiscoverForms(context.Background()); err == nil {
+		t.Fatal("expected an error when the web UI redirects to another scheme")
+	}
+	if after := c.BaseURL(); after != before {
+		t.Fatalf("base moved from %s to %s", before, after)
+	}
+}
+
+func TestMarkdownEscapesDeviceStrings(t *testing.T) {
+	r := &FormsReport{Forms: []FormRef{{Area: "device", Form: "device_list"}}}
+	md := r.Markdown("Evil | model\n# injected", "1.0`x`", nil)
+	firstLine, _, _ := strings.Cut(md, "\n")
+	if strings.Contains(md, "\n# injected") || !strings.Contains(firstLine, `\|`) || strings.Contains(firstLine, "`") {
+		t.Fatalf("device strings not escaped:\n%s", md)
 	}
 }
