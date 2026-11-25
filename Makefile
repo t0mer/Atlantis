@@ -2,6 +2,8 @@ VERSION ?= dev
 LDFLAGS := -s -w -X main.version=$(VERSION)
 BIN     := bin/atlantis
 IMAGE   ?= techblog/atlantis
+# web/node_modules holds a third-party Go package (flatted); skip it.
+PKGS     = $(shell go list ./... | grep -v /web/node_modules/)
 
 .PHONY: all web build build-fake test test-web lint e2e dev docker clean
 
@@ -25,14 +27,14 @@ build-fake:
 
 ## test: Go tests with the race detector, then the UI unit tests
 test: test-web
-	go test -race ./...
+	go test -race $(PKGS)
 
 test-web: web/node_modules
 	cd web && npm test
 
 ## lint: go vet, golangci-lint (when installed), then typecheck and eslint
 lint: web/node_modules
-	go vet ./...
+	go vet $(PKGS)
 	@if command -v golangci-lint >/dev/null; then golangci-lint run; else echo "golangci-lint not installed, skipped"; fi
 	cd web && npm run typecheck && npm run lint
 

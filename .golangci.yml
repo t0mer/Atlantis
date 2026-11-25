@@ -34,6 +34,8 @@ linters:
         - (*github.com/t0mer/atlantis/internal/session.Manager).Close
         - (*github.com/t0mer/atlantis/internal/deco/tmp.Session).Close
   exclusions:
+    paths:
+      - web/node_modules # flatted ships a Go package
     rules:
       # Tests and the pretend Decos may ignore errors from setup and cleanup.
       - path: _test\.go

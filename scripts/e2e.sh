@@ -16,7 +16,7 @@ trap cleanup EXIT INT TERM
 # SEED=1 starts with a day of history (for README screenshots).
 seed=()
 [ -n "${SEED:-}" ] && seed=(-seed-history "$DIR/atlantis.db")
-bin/atlantis-fake -listen "127.0.0.1:$FAKE_PORT" -churn "${FAKE_CHURN:-20s}" "${seed[@]}" &
+bin/atlantis-fake -listen "127.0.0.1:$FAKE_PORT" -churn "${FAKE_CHURN:-20s}" ${seed[@]+"${seed[@]}"} &
 pids+=($!)
 for _ in $(seq 100); do # the fake listens once any seeding is done
   (exec 3<>"/dev/tcp/127.0.0.1/$FAKE_PORT") 2>/dev/null && break
@@ -32,10 +32,12 @@ ATLANTIS_POLL_FAST=10s ATLANTIS_LOG_FORMAT=text \
   bin/atlantis serve >"$DIR/serve.log" 2>&1 &
 pids+=($!)
 
+up=
 for _ in $(seq 50); do
-  bin/atlantis healthcheck --url "http://127.0.0.1:$API_PORT/health" 2>/dev/null && break
+  bin/atlantis healthcheck --url "http://127.0.0.1:$API_PORT/health" 2>/dev/null && { up=1; break; }
   sleep 0.2
 done
+[ -n "$up" ] || { echo "atlantis serve did not start:"; cat "$DIR/serve.log"; exit 1; }
 
 cd web && ATLANTIS_URL="http://127.0.0.1:$API_PORT" npx playwright test "$@" || {
   echo "--- serve log ---"; tail -50 "$DIR/serve.log"; exit 1
