@@ -84,6 +84,9 @@ func (l *limiter) reset(keys ...string) {
 	}
 }
 
+// dummyHash is compared against for unknown usernames.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("atlantis-no-such-user"), bcrypt.DefaultCost)
+
 type credentials struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -141,9 +144,15 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "too many failed logins; try again later")
 		return
 	}
+	// Count the attempt before the slow hash so concurrent guesses cannot
+	// all pass the check; a success clears it again.
+	s.limiter.fail(keys...)
 	u, err := s.store.UserByName(r.Context(), c.Username)
-	if err != nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(c.Password)) != nil {
-		s.limiter.fail(keys...)
+	hash := []byte(u.PasswordHash)
+	if err != nil {
+		hash = dummyHash // same work for unknown users, so timing reveals nothing
+	}
+	if bcrypt.CompareHashAndPassword(hash, []byte(c.Password)) != nil || err != nil {
 		writeError(w, http.StatusUnauthorized, "wrong username or password")
 		return
 	}

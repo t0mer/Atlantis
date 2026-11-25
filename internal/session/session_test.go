@@ -68,10 +68,43 @@ func TestAuthFailureStopsWithoutRetrying(t *testing.T) {
 	if f.calls != 1 {
 		t.Fatalf("the device was contacted %d times after a rejected password", f.calls)
 	}
+	// Review finding: no path may send the rejected password again.
 	f.err = nil
-	m.Resume() // after the password is changed
+	m.Resume()
+	m.Release(context.Background(), time.Minute)
+	m.Pause(context.Background())
+	m.Resume()
+	m.ClearCert()
+	for range 3 {
+		if err := call(m); !errors.Is(err, ErrStopped) {
+			t.Fatalf("resumed after auth_failed: %v", err)
+		}
+	}
+	if f.calls != 1 || m.Status().State != StateAuthFailed {
+		t.Fatalf("calls=%d state=%s", f.calls, m.Status().State)
+	}
+}
+
+func TestReleaseExpiryAfterAuthFailedStaysStopped(t *testing.T) {
+	m, f, now, _ := setup(t)
+	f.err = deco.ErrWrongPassword
+	call(m)
+	m.Release(context.Background(), time.Minute)
+	*now = now.Add(2 * time.Minute)
+	f.err = nil
+	if !errors.Is(call(m), ErrStopped) || f.calls != 1 {
+		t.Fatal("release expiry retried the password")
+	}
+}
+
+func TestClearCertLiftsOnlyCertStops(t *testing.T) {
+	m, f, _, _ := setup(t)
+	f.err = deco.ErrCertChanged
+	call(m)
+	f.err = nil
+	m.ClearCert()
 	if call(m) != nil || m.Status().State != StateConnected {
-		t.Fatal("resume")
+		t.Fatal("accepting the key must resume")
 	}
 }
 

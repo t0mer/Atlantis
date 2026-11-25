@@ -67,6 +67,12 @@ type Manager struct {
 	st       Status
 	backoff  time.Duration
 	resumeAt time.Time // auto-resume after Release
+	// stop latches auth_failed / cert_changed / cert_unknown. Pause,
+	// Release and Resume never clear it: a rejected password is never sent
+	// again (a new password needs a restart), and a key change is cleared
+	// only by ClearCert after the user accepts the new key.
+	stop  State
+	stopE string
 }
 
 // New returns a manager. onChange, if non-nil, is called (without locks
@@ -113,21 +119,22 @@ func (m *Manager) gate() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.now()
+	if m.stop != "" {
+		return ErrStopped
+	}
 	switch m.st.State {
 	case StatePaused:
 		if !m.resumeAt.IsZero() && !now.Before(m.resumeAt) {
 			// Release period over: leave the paused state for good.
 			m.resumeAt = time.Time{}
 			m.st.State, m.st.Since, m.st.PausedFor = StateIdle, now, ""
-			return nil
+			return nil // (a latched stop was already refused above)
 		}
 		return ErrPaused
 	case StateBlocked:
 		if now.Before(m.st.RetryAt) {
 			return ErrBlocked
 		}
-	case StateAuthFailed, StateCertChanged, StateCertUnknown:
-		return ErrStopped
 	}
 	return nil
 }
@@ -161,13 +168,13 @@ func (m *Manager) classify(before State, err error) {
 			}
 		})
 	case errors.Is(err, deco.ErrWrongPassword), errors.Is(err, deco.ErrAuthFailed):
-		m.set(StateAuthFailed, err, nil)
+		m.latch(StateAuthFailed, err)
 		m.logout()
 	case errors.Is(err, deco.ErrCertChanged):
-		m.set(StateCertChanged, err, nil)
+		m.latch(StateCertChanged, err)
 		m.logout()
 	case errors.Is(err, deco.ErrCertUnknown):
-		m.set(StateCertUnknown, err, nil)
+		m.latch(StateCertUnknown, err)
 	case errors.Is(err, deco.ErrOtherAdmin):
 		m.mu.Lock()
 		if m.backoff == 0 {
@@ -186,6 +193,25 @@ func (m *Manager) classify(before State, err error) {
 	}
 }
 
+func (m *Manager) latch(st State, err error) {
+	m.mu.Lock()
+	m.stop, m.stopE = st, err.Error()
+	m.mu.Unlock()
+	m.set(st, err, nil)
+}
+
+// restoreStop re-applies a latched stop after a pause or release ends.
+func (m *Manager) restoreStop() bool {
+	m.mu.Lock()
+	st, e := m.stop, m.stopE
+	m.mu.Unlock()
+	if st == "" {
+		return false
+	}
+	m.set(st, errors.New(e), func(s *Status) { s.RetryAt, s.PausedFor = time.Time{}, "" })
+	return true
+}
+
 func (m *Manager) logout() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -200,7 +226,9 @@ func (m *Manager) Pause(ctx context.Context) error {
 	m.resumeAt = time.Time{}
 	m.mu.Unlock()
 	err := m.client.Logout(ctx)
-	m.set(StatePaused, nil, func(s *Status) { s.PausedFor = "" })
+	if m.Stopped() == "" {
+		m.set(StatePaused, nil, func(s *Status) { s.PausedFor = "" })
+	}
 	return err
 }
 
@@ -208,6 +236,9 @@ func (m *Manager) Pause(ctx context.Context) error {
 // resume by themselves afterwards.
 func (m *Manager) Release(ctx context.Context, d time.Duration) error {
 	err := m.Pause(ctx)
+	if m.Stopped() != "" {
+		return err // nothing to resume into
+	}
 	m.mu.Lock()
 	m.resumeAt = m.now().Add(d)
 	m.st.PausedFor = d.String()
@@ -215,13 +246,35 @@ func (m *Manager) Release(ctx context.Context, d time.Duration) error {
 	return err
 }
 
-// Resume allows calls again after Pause, Release, a backoff, or once the
-// cause of auth_failed / cert_changed has been fixed by the caller.
+// Resume allows calls again after Pause, Release or a backoff. It does not
+// clear auth_failed (restart with a new password) or a certificate stop
+// (ClearCert).
 func (m *Manager) Resume() {
 	m.mu.Lock()
 	m.resumeAt, m.backoff = time.Time{}, 0
 	m.mu.Unlock()
+	if m.restoreStop() {
+		return
+	}
 	m.set(StateIdle, nil, func(s *Status) { s.RetryAt, s.PausedFor = time.Time{}, "" })
+}
+
+// ClearCert lifts a cert_changed / cert_unknown stop after the user has
+// accepted the device's current key. It never clears auth_failed.
+func (m *Manager) ClearCert() {
+	m.mu.Lock()
+	if m.stop == StateCertChanged || m.stop == StateCertUnknown {
+		m.stop, m.stopE = "", ""
+	}
+	m.mu.Unlock()
+	m.Resume()
+}
+
+// Stopped reports the latched stop state, or "".
+func (m *Manager) Stopped() State {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stop
 }
 
 // Close logs out.

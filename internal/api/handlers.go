@@ -322,8 +322,8 @@ func (s *Server) patchWiFi(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if body.Enable != nil || body.Band != "" {
-		notVerified(w, r)
+	if body.Enable != nil || body.Band != "" || (body.Network != "" && body.Network != "host") {
+		notVerified(w, r) // only the main network's SSID/password is verified
 		return
 	}
 	if body.Network != "host" || body.SSID == "" || body.Password == "" {
@@ -641,7 +641,7 @@ func (s *Server) acceptHostKey(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.Session.Resume()
+	s.Session.ClearCert() // never clears auth_failed
 	s.Poller.Refresh()
 	writeJSON(w, http.StatusOK, s.Session.Status())
 }

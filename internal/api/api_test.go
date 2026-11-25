@@ -233,8 +233,8 @@ func TestWritesAreGuarded(t *testing.T) {
 	if code, _, _ := e.do(t, "PATCH", "/api/v1/wifi", `{"band":"band2_4","network":"guest","enable":true}`, true); code != 501 {
 		t.Fatal("unverified Wi-Fi toggle must answer 501")
 	}
-	if code, _, _ := e.do(t, "PATCH", "/api/v1/wifi", `{"network":"guest","ssid":"x","password":"longenough"}`, true); code != 400 {
-		t.Fatal("only the host network may be changed")
+	if code, _, _ := e.do(t, "PATCH", "/api/v1/wifi", `{"network":"guest","ssid":"x","password":"longenough"}`, true); code != 501 {
+		t.Fatal("writes to other networks must answer 501")
 	}
 	code, m, raw := e.do(t, "PATCH", "/api/v1/wifi", `{"network":"host","ssid":"Test-SSID","password":"test-pass-123"}`, true)
 	if code != 200 || e.fake.wifiSets != 1 || e.fake.ssid != "Test-SSID" {
@@ -373,5 +373,51 @@ func TestMetricsBearerToken(t *testing.T) {
 		if rr.Code != want {
 			t.Errorf("token %q: %d, want %d", tok, rr.Code, want)
 		}
+	}
+}
+
+// Review finding: the stream must outlive the 60s request timeout.
+func TestStreamIsNotTimedOut(t *testing.T) {
+	var found bool
+	s := New(Deps{Config: &config.Config{Metrics: config.Metrics{Path: "/metrics"}}, Log: slog.Default()})
+	chi.Walk(s.Handler().(chi.Routes), func(method, route string, h http.Handler, mws ...func(http.Handler) http.Handler) error {
+		if route == "/api/v1/stream" {
+			found = true
+			if len(mws) > 3 { // Recoverer, securityHeaders, requireAuth (via With); a timeout would be a 4th
+				t.Errorf("stream has %d middlewares; the timeout must not apply", len(mws))
+			}
+		}
+		return nil
+	})
+	if !found {
+		t.Fatal("stream route missing")
+	}
+}
+
+// Review finding: parallel guesses must not exceed the limit.
+func TestLoginLimitHoldsUnderConcurrency(t *testing.T) {
+	e := newEnv(t)
+	e.login(t)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	unauthorized := 0
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := http.Post(e.srv.URL+"/api/v1/auth/login", "application/json", strings.NewReader(`{"username":"admin","password":"wrong"}`))
+			if err == nil {
+				if resp.StatusCode == 401 {
+					mu.Lock()
+					unauthorized++
+					mu.Unlock()
+				}
+				resp.Body.Close()
+			}
+		}()
+	}
+	wg.Wait()
+	if unauthorized > maxFailures {
+		t.Fatalf("%d guesses were checked, limit is %d", unauthorized, maxFailures)
 	}
 }
