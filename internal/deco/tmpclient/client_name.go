@@ -103,18 +103,20 @@ func (c *Client) renameClient(ctx context.Context, mac, name string, userSet boo
 	// Once sent, the write runs to completion even if the caller gives up.
 	wctx := context.WithoutCancel(ctx)
 	if _, err := c.request(wctx, tmp.OpClientListSet, map[string]any{"client_list": []any{renameEntry(cur, name, userSet)}}); err != nil {
-		return fmt.Errorf("renaming on the Deco: %w", err)
+		// The frame may have been applied before the error (a timeout):
+		// the outcome is unknown, not refused.
+		return fmt.Errorf("%w: the Deco did not confirm the rename (it may have taken it): %w", deco.ErrNotApplied, err)
 	}
 	after, err := c.ClientEntry(wctx, mac)
 	if err != nil {
-		return fmt.Errorf("%w: the rename was sent, but reading it back failed: %v", deco.ErrNotApplied, err)
+		return fmt.Errorf("%w: the rename was sent, but reading it back failed: %w", deco.ErrNotApplied, err)
 	}
 	if b64Text(after.Str("name")) == name {
 		return nil
 	}
 	undo := map[string]any{"client_list": []any{renameEntry(cur, oldName, true)}}
 	if _, rerr := c.request(wctx, tmp.OpClientListSet, undo); rerr != nil {
-		return fmt.Errorf("%w: the Deco accepted the new name but does not show it, and restoring the old name failed: %v", deco.ErrNotApplied, rerr)
+		return fmt.Errorf("%w: the Deco accepted the new name but does not show it, and restoring the old name failed: %w", deco.ErrNotApplied, rerr)
 	}
 	return fmt.Errorf("%w: the Deco accepted the new name but does not show it; the old name was restored", deco.ErrNotApplied)
 }

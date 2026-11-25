@@ -268,7 +268,7 @@ paths:
         "200": { description: "Updated; deco_renamed says whether the Deco was renamed" }
         "400": { description: Invalid name }
         "404": { description: Unknown client, or the Deco doesn't list it right now (nothing saved) }
-        "502": { description: The Deco refused the new name (nothing saved) }
+        "502": { description: "The Deco refused the name, or did not confirm it (it may have taken it); nothing saved in Atlantis" }
         "503": { description: The Deco session is paused or blocked (nothing saved) }
   /api/v1/wifi:
     get:

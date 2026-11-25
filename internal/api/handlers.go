@@ -324,7 +324,7 @@ func (s *Server) patchClient(w http.ResponseWriter, r *http.Request) {
 		err := run.Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {
 			return c.(deco.ClientRenamer).RenameClient(ctx, mac, *body.Alias)
 		})
-		s.audit(r.Context(), userFrom(r.Context()), "client.rename", mac+" name="+*body.Alias, err)
+		s.audit(context.WithoutCancel(r.Context()), userFrom(r.Context()), "client.rename", mac+" name="+*body.Alias, err)
 		switch {
 		case err == nil:
 			renamed = true
