@@ -111,3 +111,20 @@ func TestRawRedactsSecrets(t *testing.T) {
 		t.Fatalf("expected a redaction marker: %s", raw)
 	}
 }
+
+// Review finding: numeric statuses (older firmware) must not drop nodes.
+func TestDevicesToleratesNumericStatus(t *testing.T) {
+	f := newFake(t)
+	f.SetResult("device/device_list", map[string]any{"device_list": []any{
+		map[string]any{"mac": "AA-BB-CC-DD-EE-01", "role": "master", "group_status": 1, "inet_status": 1},
+		map[string]any{"mac": "AA-BB-CC-DD-EE-02", "role": "slave", "group_status": 0, "signal_strength": map[string]any{"band5": "3"}},
+	}})
+	c, _ := New(f.Plain.URL, "secret", Options{})
+	ds, err := c.Devices(context.Background())
+	if err != nil || len(ds) != 2 {
+		t.Fatalf("%+v %v", ds, err)
+	}
+	if !ds[0].Online || !ds[0].InternetOnline || ds[1].Online || ds[1].Backhaul.Signal["band5_1"] != 3 || ds[1].Backhaul.Type != "" {
+		t.Fatalf("%+v", ds)
+	}
+}

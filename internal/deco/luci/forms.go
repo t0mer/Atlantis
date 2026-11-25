@@ -21,61 +21,43 @@ var (
 	wireMAC      = deco.WireMAC
 )
 
-type wireDevice struct {
-	MAC            string                  `json:"mac"`
-	Nickname       string                  `json:"nickname"`
-	CustomNickname string                  `json:"custom_nickname"`
-	Role           string                  `json:"role"`
-	DeviceModel    string                  `json:"device_model"`
-	DeviceIP       string                  `json:"device_ip"`
-	HardwareVer    string                  `json:"hardware_ver"`
-	SoftwareVer    string                  `json:"software_ver"`
-	GroupStatus    string                  `json:"group_status"`
-	InetStatus     string                  `json:"inet_status"`
-	Signal         map[string]deco.FlexInt `json:"signal_strength"`
-	Previous       string                  `json:"previous"`
-}
-
 // Devices lists the mesh nodes (area device, form device_list). The local
-// API identifies nodes by MAC, so Device.ID is the MAC; status strings
-// follow the same values as the TMP device list.
+// API identifies nodes by MAC, so Device.ID is the MAC. Fields are read
+// leniently (deco.Obj): an odd value never drops a node.
 func (c *Client) Devices(ctx context.Context) ([]deco.Device, error) {
 	raw, err := c.call(ctx, "device", "device_list", "read", nil)
 	if err != nil {
 		return nil, err
 	}
-	var w struct {
-		DeviceList []json.RawMessage `json:"device_list"`
-	}
-	if err := json.Unmarshal(raw, &w); err != nil {
-		return nil, err
-	}
-	out := make([]deco.Device, 0, len(w.DeviceList))
-	for _, item := range w.DeviceList {
-		var d wireDevice
-		if json.Unmarshal(item, &d) != nil {
-			continue // one unreadable node must not hide the others
+	top, _ := deco.ParseObj(raw)
+	var out []deco.Device
+	for _, d := range top.Objs("device_list") {
+		mac := normalizeMAC(d.Str("mac"))
+		if mac == "" {
+			continue
 		}
-		name := decodeName(d.CustomNickname)
+		name := decodeName(d.Str("custom_nickname"))
 		if name == "" {
-			name = decodeName(d.Nickname)
+			name = decodeName(d.Str("nickname"))
 		}
-		mac := normalizeMAC(d.MAC)
+		role, group, inet := d.Str("role"), d.Str("group_status"), d.Str("inet_status")
 		dev := deco.Device{
-			ID: mac, MAC: mac, IP: d.DeviceIP, Nickname: name, Model: d.DeviceModel,
-			HardwareVer: d.HardwareVer, SoftwareVer: d.SoftwareVer,
-			Master:         strings.EqualFold(d.Role, "master"),
-			Online:         !strings.EqualFold(d.GroupStatus, "disconnected"),
-			InternetOnline: strings.EqualFold(d.InetStatus, "online"),
-			Role:           d.Role, GroupStatus: d.GroupStatus, InetStatus: d.InetStatus,
+			ID: mac, MAC: mac, IP: d.Str("device_ip"), Nickname: name, Model: d.Str("device_model"),
+			HardwareVer: d.Str("hardware_ver"), SoftwareVer: d.Str("software_ver"),
+			Master: strings.EqualFold(role, "master"),
+			// Older firmware sends numeric statuses; treat 1 as up.
+			Online:         !strings.EqualFold(group, "disconnected") && group != "0",
+			InternetOnline: strings.EqualFold(inet, "online") || inet == "1",
+			Role:           role, GroupStatus: group, InetStatus: inet,
 		}
 		if !dev.Master {
-			dev.ParentID = normalizeMAC(d.Previous)
-			dev.Backhaul = deco.Backhaul{Type: deco.BackhaulWiFi}
-			if len(d.Signal) > 0 {
+			dev.ParentID = normalizeMAC(d.Str("previous"))
+			// The local API does not say how a satellite is linked; the
+			// backhaul type stays unknown rather than guessed.
+			if sig := d.Ints("signal_strength"); len(sig) > 0 {
 				dev.Backhaul.Signal = map[string]int{}
-				for band, v := range d.Signal {
-					dev.Backhaul.Signal[deco.NormalizeBand(band)] = int(v)
+				for band, v := range sig {
+					dev.Backhaul.Signal[deco.NormalizeBand(band)] = v
 				}
 			}
 		}
@@ -84,52 +66,42 @@ func (c *Client) Devices(ctx context.Context) ([]deco.Device, error) {
 	return out, nil
 }
 
-type wireClient struct {
-	MAC            string        `json:"mac"`
-	IP             string        `json:"ip"`
-	Name           string        `json:"name"`
-	Online         deco.FlexBool `json:"online"`
-	WireType       string        `json:"wire_type"`
-	ConnectionType string        `json:"connection_type"`
-	Interface      string        `json:"interface"`
-	UpSpeed        deco.FlexInt  `json:"up_speed"`
-	DownSpeed      deco.FlexInt  `json:"down_speed"`
-}
-
 // Clients lists clients seen by one node (a Device.ID, i.e. its MAC here),
-// or by all nodes when node is empty (area client, form client_list).
-// Speeds are taken as kbps like the TMP API; unverified on luci firmware.
+// or by all nodes when node is empty (area client, form client_list); a
+// client with no node is attributed to the master. Speeds are taken as kbps
+// like the TMP API; unverified on luci firmware.
 func (c *Client) Clients(ctx context.Context, node string) ([]deco.WifiClient, error) {
 	mac := "default"
 	if node != "" {
 		mac = wireMAC(node)
+	} else if devs, err := c.Devices(ctx); err == nil {
+		for _, d := range devs {
+			if d.Master {
+				node = d.ID
+			}
+		}
 	}
 	raw, err := c.call(ctx, "client", "client_list", "read", map[string]string{"device_mac": mac})
 	if err != nil {
 		return nil, err
 	}
-	var w struct {
-		ClientList []json.RawMessage `json:"client_list"`
-	}
-	if err := json.Unmarshal(raw, &w); err != nil {
-		return nil, err
-	}
-	out := make([]deco.WifiClient, 0, len(w.ClientList))
-	for _, item := range w.ClientList {
-		var cl wireClient
-		if json.Unmarshal(item, &cl) != nil {
+	top, _ := deco.ParseObj(raw)
+	var out []deco.WifiClient
+	for _, cl := range top.Objs("client_list") {
+		cm := normalizeMAC(cl.Str("mac"))
+		if cm == "" {
 			continue
 		}
-		wired := strings.EqualFold(cl.WireType, "wired")
-		c := deco.WifiClient{
-			MAC: normalizeMAC(cl.MAC), IP: cl.IP, Name: decodeName(cl.Name),
-			Online: bool(cl.Online), Network: cl.Interface, Wired: wired, NodeID: node,
-			UpBps: int64(cl.UpSpeed) * 1000, DownBps: int64(cl.DownSpeed) * 1000,
+		wired := strings.EqualFold(cl.Str("wire_type"), "wired")
+		wc := deco.WifiClient{
+			MAC: cm, IP: cl.Str("ip"), Name: decodeName(cl.Str("name")),
+			Online: cl.Bool("online"), Network: cl.Str("interface"), Wired: wired, NodeID: node,
+			UpBps: cl.Int("up_speed") * 1000, DownBps: cl.Int("down_speed") * 1000,
 		}
 		if !wired {
-			c.Band = deco.NormalizeBand(cl.ConnectionType)
+			wc.Band = deco.NormalizeBand(cl.Str("connection_type"))
 		}
-		out = append(out, c)
+		out = append(out, wc)
 	}
 	return out, nil
 }
@@ -199,22 +171,23 @@ func (c *Client) Wireless(ctx context.Context) (*deco.WirelessConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	var w map[string]map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &w); err != nil {
-		return nil, err
-	}
-	out := &deco.WirelessConfig{Bands: make(map[string]deco.Band, len(w))}
-	for band, nets := range w {
-		b := deco.Band{Networks: make(map[string]deco.NetworkConfig, len(nets))}
-		for name, nraw := range nets {
-			var n struct {
-				Enable deco.FlexBool `json:"enable"`
-				SSID   string        `json:"ssid"`
-			}
-			if json.Unmarshal(nraw, &n) != nil {
+	top, _ := deco.ParseObj(raw)
+	out := &deco.WirelessConfig{Bands: map[string]deco.Band{}}
+	for band := range top {
+		if !deco.IsBand(band) {
+			continue
+		}
+		nets, ok := deco.ParseObj(top[band])
+		if !ok {
+			continue
+		}
+		b := deco.Band{Networks: map[string]deco.NetworkConfig{}}
+		for name := range nets {
+			n, ok := deco.ParseObj(nets[name])
+			if !ok {
 				continue
 			}
-			b.Networks[name] = deco.NetworkConfig{Enable: bool(n.Enable), SSID: decodeName(n.SSID)}
+			b.Networks[name] = deco.NetworkConfig{Enable: n.Bool("enable"), SSID: decodeName(n.Str("ssid"))}
 		}
 		out.Bands[band] = b
 	}
