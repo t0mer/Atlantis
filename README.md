@@ -35,7 +35,7 @@ It is a single Go binary with the web UI built in. It runs on a Raspberry Pi, a 
 - **Mesh at a glance.** See whether the internet is up and how many Decos and devices are online. The mesh is drawn as a tree that shows how each satellite connects back (wired or wireless, with signal bars).
 - **24-hour presence strips** for every Deco and device. They show when each one was online, with changes marked.
 - **Clients.** Search and filter by online state, Deco, band, network (main, guest, IoT) and watched. Each device shows its current speed, a 24-hour strip and a detail page with presence, throughput and connection history over 24 hours, 7 days or 30 days.
-- **Names that stay yours.** Give a device a name, tags and a "watch" flag. These are stored in Atlantis; the Deco is not changed.
+- **Rename devices everywhere.** Give a device a name and it is renamed on the Deco too, so the Deco app shows it (Hebrew names work). Tick "Only in Atlantis" to keep a name to Atlantis. Tags and a "watch" flag are stored in Atlantis.
 - **Decos.** Model, firmware (with a notice when an update is available), IP and MAC, role, backhaul, and the devices connected to each one.
 - **Connect from the browser.** Atlantis starts without a Deco. Add the main Deco's address and your TP-Link ID on the first page, and change or remove it later in Settings. Atlantis signs in to check the details before it saves them.
 - **Wi-Fi.** Every band and network with its name, security and state. Turn the guest and IoT networks on or off and change their name and password (and the guest network's security). Change the main network's name and password on all bands, after typing `CHANGE` to confirm. Only changes that have been tested on a real Deco are offered (see [Wi-Fi changes](#wi-fi-changes)).
@@ -275,6 +275,7 @@ The Settings page shows the active configuration. The Deco connection and the re
   - **Resume now:** sign back in early, after a release, a pause, or another admin taking the session.
   - **Trust the new key:** shown when the Deco presents a different key than before. That is expected after a firmware update or reset; otherwise, don't trust it.
 - **Settings** also has the same session controls, plus **Release for an hour** and **Pause polling**, the notification channels and the active configuration.
+- **Renaming a device** (on its detail page, **Name and tags**) renames it on the Deco first, then in Atlantis. If the Deco refuses, for example because it doesn't list a device that has been away for a while, nothing is saved and the page says why. Clearing the name clears it in Atlantis only; the Deco keeps its name.
 - **Watching a device** (on its detail page) can limit notifications to the devices you care about. With `metrics.per_client: watched`, watched devices also get their own metrics.
 - **Not available yet:** restarting Decos. The button appears in the UI but is disabled until it is verified on real hardware. Use the Deco app for that.
 
@@ -288,6 +289,8 @@ Atlantis only offers a Wi-Fi change after it has been tested on a real Deco: the
 | Guest | On or off; name, password and security (open or WPA2) |
 | IoT | On or off; name and password |
 | Multi-link | Shown, not changed yet |
+
+Renaming a device on the Deco is tested the same way (with an ASCII and a Hebrew name).
 
 Each change keeps the network's other settings as the Deco reports them, is read back to confirm, and disconnects the devices on that network until they join again. The main network cannot be turned off. Everything else answers "not available yet". Developers can test more with `atlantis ssh wifi-probe` (see [Command line](#command-line)).
 
@@ -353,7 +356,7 @@ The UI uses the REST API under `/api/v1`. The OpenAPI spec is at `/api/openapi.y
 | `GET` | `/api/v1/network` | Summary: internet, Decos, client counts, session state |
 | `GET` | `/api/v1/nodes`, `/api/v1/nodes/{id}?range=24h\|7d\|30d` | Decos, and one Deco with its history |
 | `GET` | `/api/v1/clients?q=&online=&node=&band=&network=` | Devices |
-| `GET` / `PATCH` | `/api/v1/clients/{mac}` | One device with history; set `alias`, `watch`, `tags` |
+| `GET` / `PATCH` | `/api/v1/clients/{mac}` | One device with history; set `alias` (also renames it on the Deco unless `local_only`), `watch`, `tags` |
 | `GET` / `PATCH` | `/api/v1/wifi` | Wi-Fi, with `editable` listing the changes allowed per network. `PATCH` changes one network, for example `{"network":"guest","enable":false}` or `{"network":"host","ssid":"...","password":"..."}` (`ssh` transport only). |
 | `GET` / `POST` / `PUT` / `DELETE` | `/api/v1/deco` | The Deco connection: show it, add it (checked by signing in first), change it, or remove it with `{"confirm":"REMOVE"}`. The password is never returned. |
 | `GET` | `/api/v1/firmware` | Available firmware updates |
@@ -379,6 +382,7 @@ The UI uses the REST API under `/api/v1`. The OpenAPI spec is at `/api/openapi.y
 | `atlantis version` | Print the version. |
 | `atlantis ssh probe --host IP --email EMAIL` | Sign in over SSH and print what the Deco reports. Read-only. The password comes from `ATLANTIS_CLOUD_PASSWORD`. |
 | `atlantis ssh set-wifi --host IP --ssid NAME` | Change the main Wi-Fi name and password on every band. The new password comes from `ATLANTIS_WIFI_PASSWORD`. |
+| `atlantis ssh client-rename-probe --host IP --mac MAC` | Test renaming a device on a Deco (an ASCII and a Hebrew name) and put its name back. Writes a sanitised record for the tests. |
 | `atlantis ssh wifi-probe --host IP --network guest --field enable` | Test one Wi-Fi change on a Deco and undo it: `--field` is `enable`, `ssid`, `password`, `encryption` or `hidden`. It refuses changes that would cut off devices (turning off an IoT network that is on, or the main network). Writes a sanitised record for the tests. |
 | `atlantis probe --host IP` | Sign in to the local web API (`luci`) and print what it reports. Read-only. |
 | `atlantis cloud probe --email EMAIL` | List your sites through the TP-Link cloud. Read-only. |
