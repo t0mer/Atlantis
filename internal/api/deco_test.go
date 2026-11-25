@@ -183,14 +183,31 @@ func TestSettingsSectionsApplyAtOnce(t *testing.T) {
 	if code != 400 || m["logging"].(map[string]any)["level"] != "debug" {
 		t.Fatalf("%d %v", code, m["logging"])
 	}
-	// Secure cookies follow the https public URL.
-	resp, _ := http.Post(e.srv.URL+"/api/v1/auth/login", "application/json", strings.NewReader(`{"username":"admin","password":"correct horse battery"}`))
-	if resp != nil {
+	// Secure cookies need the https public address and an HTTPS request:
+	// plain HTTP still gets a cookie the browser keeps (no lockout).
+	login := func(proto string) *http.Cookie {
+		req, _ := http.NewRequest("POST", e.srv.URL+"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"correct horse battery"}`))
+		req.Header.Set("Content-Type", "application/json")
+		if proto != "" {
+			req.Header.Set("X-Forwarded-Proto", proto)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
 		resp.Body.Close()
 		for _, c := range resp.Cookies() {
-			if c.Name == "atlantis_session" && !c.Secure {
-				t.Fatal("an https public URL must make the cookie Secure")
+			if c.Name == "atlantis_session" {
+				return c
 			}
 		}
+		t.Fatal("no session cookie")
+		return nil
+	}
+	if login("").Secure {
+		t.Fatal("a plain HTTP login must not get a Secure cookie")
+	}
+	if !login("https").Secure {
+		t.Fatal("an HTTPS login with an https public address must get a Secure cookie")
 	}
 }

@@ -93,7 +93,7 @@ type settingsBody struct {
 }
 
 // putSettings changes any of the sections. Everything is checked before
-// anything is saved, so a request changes all of it or none.
+// anything is saved; the UI settings are saved in one transaction.
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	var b settingsBody
 	if !readJSON(w, r, &b) {
@@ -142,21 +142,31 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := userFrom(r.Context())
-	if pt != (prefs.Patch{}) {
-		changed, err := s.Prefs.Update(r.Context(), pt)
-		s.audit(r.Context(), user, "settings.update", strings.Join(changed, ","), err)
-		if errors.Is(err, prefs.ErrInvalid) {
+	hasPrefs := pt != (prefs.Patch{})
+	// Check everything before saving anything, so a request changes all
+	// of it or none (short of a storage failure).
+	if hasPrefs {
+		if err := s.Prefs.Check(pt); err != nil {
+			s.audit(r.Context(), user, "settings.update", strings.Join(pt.Sections(), ","), err)
 			bad(err.Error())
 			return
 		}
+	}
+	if poll != nil {
+		err := s.Site.SetPoll(r.Context(), *poll)
+		s.audit(r.Context(), user, "settings.poll", fmt.Sprintf("fast=%s slow=%s offline_after=%d", poll.Fast, poll.Slow, poll.OfflineAfterMisses), err)
 		if err != nil {
 			s.fail(w, err)
 			return
 		}
 	}
-	if poll != nil { // validated above, so only saving can fail now
-		err := s.Site.SetPoll(r.Context(), *poll)
-		s.audit(r.Context(), user, "settings.poll", fmt.Sprintf("fast=%s slow=%s offline_after=%d", poll.Fast, poll.Slow, poll.OfflineAfterMisses), err)
+	if hasPrefs {
+		_, err := s.Prefs.Update(r.Context(), pt)
+		s.audit(r.Context(), user, "settings.update", strings.Join(pt.Sections(), ","), err)
+		if errors.Is(err, prefs.ErrInvalid) {
+			bad(err.Error())
+			return
+		}
 		if err != nil {
 			s.fail(w, err)
 			return

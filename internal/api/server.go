@@ -78,10 +78,15 @@ func New(d Deps) *Server {
 	return s
 }
 
-// secureCookies marks the session cookie Secure when Atlantis is reached
-// over HTTPS (the public URL set in Settings).
-func (s *Server) secureCookies() bool {
-	return strings.HasPrefix(s.Prefs.Get().Access.BaseURL, "https://")
+// secureCookies marks the session cookie Secure when the public address in
+// Settings is https and this request came over HTTPS (directly, or through
+// a proxy that says so). A browser on plain HTTP therefore still gets a
+// cookie it keeps, so a wrong public address cannot lock anyone out.
+func (s *Server) secureCookies(r *http.Request) bool {
+	if !strings.HasPrefix(strings.ToLower(s.Prefs.Get().Access.BaseURL), "https://") {
+		return false
+	}
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // Handler returns the router.
