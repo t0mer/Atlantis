@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"unicode"
 	"unicode/utf8"
@@ -84,6 +83,14 @@ func renameEntry(cur deco.Obj, name string, userSet bool) map[string]any {
 	return e
 }
 
+// renameClient sends the rename, then reads it back. Only when the read-back
+// shows a different name is the old one put back; if the read-back itself
+// fails the outcome is unknown and nothing more is sent, so a rename that
+// worked is never undone by mistake.
+//
+// The flag user_set_name_type is write-only (CLIENT_LIST_GET does not
+// report it), so an undo cannot restore its earlier value; it sends true,
+// as the app does for every rename.
 func (c *Client) renameClient(ctx context.Context, mac, name string, userSet bool) error {
 	if err := ValidateClientName(name); err != nil {
 		return err
@@ -93,20 +100,21 @@ func (c *Client) renameClient(ctx context.Context, mac, name string, userSet boo
 		return err
 	}
 	oldName := b64Text(cur.Str("name"))
-	if _, err := c.request(ctx, tmp.OpClientListSet, map[string]any{"client_list": []any{renameEntry(cur, name, userSet)}}); err != nil {
+	// Once sent, the write runs to completion even if the caller gives up.
+	wctx := context.WithoutCancel(ctx)
+	if _, err := c.request(wctx, tmp.OpClientListSet, map[string]any{"client_list": []any{renameEntry(cur, name, userSet)}}); err != nil {
 		return fmt.Errorf("renaming on the Deco: %w", err)
 	}
-	after, err := c.ClientEntry(ctx, mac)
-	if err == nil && b64Text(after.Str("name")) == name {
+	after, err := c.ClientEntry(wctx, mac)
+	if err != nil {
+		return fmt.Errorf("%w: the rename was sent, but reading it back failed: %v", deco.ErrNotApplied, err)
+	}
+	if b64Text(after.Str("name")) == name {
 		return nil
 	}
-	// Not confirmed: put the previous name back, whatever the caller does.
 	undo := map[string]any{"client_list": []any{renameEntry(cur, oldName, true)}}
-	if _, rerr := c.request(context.WithoutCancel(ctx), tmp.OpClientListSet, undo); rerr != nil {
-		return fmt.Errorf("the Deco accepted the new name but does not show it, and restoring the old name failed: %v", rerr)
+	if _, rerr := c.request(wctx, tmp.OpClientListSet, undo); rerr != nil {
+		return fmt.Errorf("%w: the Deco accepted the new name but does not show it, and restoring the old name failed: %v", deco.ErrNotApplied, rerr)
 	}
-	if err != nil {
-		return fmt.Errorf("the rename was sent, but reading it back failed (%w); the old name was restored", err)
-	}
-	return errors.New("the Deco accepted the new name but does not show it; the old name was restored")
+	return fmt.Errorf("%w: the Deco accepted the new name but does not show it; the old name was restored", deco.ErrNotApplied)
 }

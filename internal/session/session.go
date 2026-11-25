@@ -197,7 +197,10 @@ func (m *Manager) classify(before State, err error) {
 		m.mu.Unlock()
 		m.set(StateBlocked, err, func(s *Status) { s.RetryAt = retry })
 		m.logout()
-	case errors.Is(err, deco.ErrUnsupported), errors.Is(err, context.Canceled):
+	// Errors about the request, not the connection, leave the state as is.
+	case errors.Is(err, deco.ErrUnsupported), errors.Is(err, context.Canceled),
+		errors.Is(err, deco.ErrInvalid), errors.Is(err, deco.ErrNotFound),
+		errors.Is(err, deco.ErrNotVerified), errors.Is(err, deco.ErrNotApplied):
 		// a missing feature or shutdown says nothing about the session
 	default:
 		m.set(StateDisconnected, err, nil)

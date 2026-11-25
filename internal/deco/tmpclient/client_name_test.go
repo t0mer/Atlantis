@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/t0mer/atlantis/internal/deco"
@@ -121,7 +122,7 @@ func TestClientRenameHasEvidence(t *testing.T) {
 		Tried  []string `json:"tried"`
 	}
 	json.Unmarshal(b, &rec)
-	if rec.Result != "pass" || len(rec.Tried) < 2 {
+	if rec.Result != "pass" || !slices.Contains(rec.Tried, "ascii") || !slices.Contains(rec.Tried, "hebrew") {
 		t.Fatalf("the probe record does not show a pass for ASCII and Hebrew names: %+v", rec)
 	}
 }

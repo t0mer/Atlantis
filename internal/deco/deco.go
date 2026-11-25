@@ -230,6 +230,9 @@ func (e invalidError) Unwrap() error { return ErrInvalid }
 // Invalid returns an error matching ErrInvalid with a plain message.
 func Invalid(format string, a ...any) error { return invalidError{fmt.Sprintf(format, a...)} }
 
+// ErrNotApplied means the device accepted a change but does not show it.
+var ErrNotApplied = errors.New("deco: the change was not applied")
+
 // ErrNotFound means the device does not list the thing asked for.
 var ErrNotFound = errors.New("deco: not found on the device")
 
