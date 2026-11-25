@@ -43,6 +43,7 @@ export function ClientDetail() {
   const node = nodes.find((n) => n.id === c.node_id);
   const mine = events.filter((e) => e.subject === c.mac);
   const canRename = !!data?.can_rename_on_deco;
+  const nameBytes = new TextEncoder().encode(alias.trim()).length; // the Deco limit is in bytes
   const save = (body: { alias?: string; watch?: boolean; tags?: string[]; local_only?: boolean }, msg: string) =>
     update.mutate(body, {
       onSuccess: (r) => toast(r?.deco_renamed ? "Renamed on the Deco" : msg),
@@ -121,12 +122,12 @@ export function ClientDetail() {
             <Field
               label="Name"
               hint={
-                canRename && !localOnly
-                  ? "Also changes the name on the Deco and in the Deco app."
-                  : "Only Atlantis uses this name; the Deco keeps its own."
+                `${
+                  canRename && !localOnly ? "Also changes the name on the Deco and in the Deco app." : "Only Atlantis uses this name; the Deco keeps its own."
+                } Up to 64 bytes (Hebrew letters count as 2); now ${nameBytes}.`
               }
             >
-              <Input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder={c.name || c.mac} maxLength={64} dir="auto" />
+              <Input value={alias} onChange={(e) => setAlias(e.target.value)} placeholder={c.name || c.mac} dir="auto" />
             </Field>
             {canRename && (
               <label className="flex items-center gap-2 text-sm">
@@ -137,7 +138,7 @@ export function ClientDetail() {
             <Field label="Tags" hint="Separate tags with commas.">
               <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="kids, work" dir="auto" />
             </Field>
-            <Button tone="primary" type="submit" disabled={update.isPending}>
+            <Button tone="primary" type="submit" disabled={update.isPending || nameBytes > 64}>
               Save
             </Button>
           </form>
