@@ -5,7 +5,9 @@ import type {
   Channel,
   ChannelConfig,
   Client,
+  DecoConnect,
   DecoEvent,
+  DecoStatus,
   Firmware,
   NetworkSummary,
   Node,
@@ -28,6 +30,7 @@ export const useWifi = () => useQuery({ queryKey: ["wifi"], queryFn: () => api<W
 export const useFirmware = () => useQuery({ queryKey: ["firmware"], queryFn: () => api<Firmware[]>("/api/v1/firmware"), ...fallback });
 export const useSettings = () => useQuery({ queryKey: ["settings"], queryFn: () => api<Settings>("/api/v1/settings") });
 export const useChannels = () => useQuery({ queryKey: ["channels"], queryFn: () => api<Channel[]>("/api/v1/channels") });
+export const useDeco = () => useQuery({ queryKey: ["deco"], queryFn: () => api<DecoStatus>("/api/v1/deco") });
 export const useSession = () => useQuery({ queryKey: ["session"], queryFn: () => api<SessionStatus>("/api/v1/session"), ...fallback });
 
 export const useEvents = (since?: string) =>
@@ -108,4 +111,24 @@ export function useChannelMutations() {
     testSaved: useMutation({ mutationFn: (id: number) => api<{ ok: boolean; error?: string }>(`/api/v1/channels/${id}/test`, { method: "POST" }) }),
     testDraft: useMutation({ mutationFn: (c: ChannelInput) => api<{ ok: boolean; error?: string }>("/api/v1/channels/test", { method: "POST", body: c }) }),
   };
+}
+
+/** Adds the Deco, changes its connection, or removes it. Any of these
+ * changes every page, so all cached data is refetched. */
+export function useDecoMutations() {
+  const qc = useQueryClient();
+  const done = () => qc.invalidateQueries();
+  return {
+    connect: useMutation({ mutationFn: (c: DecoConnect) => api<DecoStatus>("/api/v1/deco", { method: "POST", body: c }), onSuccess: done }),
+    change: useMutation({ mutationFn: (c: DecoConnect) => api<DecoStatus>("/api/v1/deco", { method: "PUT", body: c }), onSuccess: done }),
+    remove: useMutation({ mutationFn: () => api("/api/v1/deco", { method: "DELETE", body: { confirm: "REMOVE" } }), onSuccess: done }),
+  };
+}
+
+export function useSetPoll() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (poll: { fast: string; slow: string; offline_after_misses: number }) => api<Settings>("/api/v1/settings", { method: "PUT", body: { poll } }),
+    onSuccess: (s) => qc.setQueryData(["settings"], s),
+  });
 }

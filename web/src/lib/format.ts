@@ -56,6 +56,12 @@ const backhaulNames: Record<string, string> = {
 };
 export const backhaulLabel = (t: string) => backhaulNames[t] ?? "Main unit";
 
+/** The useful tail of a Go error chain ("a: b: c" → "c"), bounded. */
+export function shortError(e: string): string {
+  const tail = e.split(": ").pop() ?? e;
+  return tail.length > 120 ? tail.slice(0, 117) + "…" : tail;
+}
+
 /** One plain sentence describing the Deco session. */
 export function sessionSentence(s: SessionStatus | undefined): { text: string; tone: "ok" | "warn" | "bad" } {
   switch (s?.state) {
@@ -68,13 +74,13 @@ export function sessionSentence(s: SessionStatus | undefined): { text: string; t
     case "blocked_by_other_admin":
       return { text: "The Deco app or another admin is signed in; retrying shortly", tone: "warn" };
     case "auth_failed":
-      return { text: "The Deco rejected the password. Fix it in the configuration and restart Atlantis", tone: "bad" };
+      return { text: "The Deco rejected the password. Enter it again under Settings, Deco", tone: "bad" };
     case "cert_changed":
       return { text: "The Deco's security key changed. Check it, then trust the new key", tone: "bad" };
     case "cert_unknown":
       return { text: "The Deco's security key is not trusted yet", tone: "bad" };
     case "disconnected":
-      return { text: "Lost the connection to the Deco; retrying", tone: "warn" };
+      return { text: s.error ? `Lost the connection to the Deco (${shortError(s.error)}); retrying` : "Lost the connection to the Deco; retrying", tone: "warn" };
     default:
       return { text: "Waiting for the first poll", tone: "warn" };
   }

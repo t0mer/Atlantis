@@ -197,7 +197,7 @@ export interface Snapshot {
 
 export interface Settings {
   deco: { transport: string; host: string; port: number; email: string };
-  poll: { fast: string; slow: string; offline_after_misses: number };
+  poll: { fast: string; slow: string; offline_after_misses: number; source: "ui" | "config" };
   store: { raw_retention: string; rollup_retention: string };
   metrics: { enabled: boolean; path: string; per_client: string };
   notify: { quiet_hours: string; timezone: string; events: EventType[] };
@@ -208,4 +208,24 @@ export interface AuthStatus {
   setup_required: boolean;
   user?: string;
   csrf_token?: string;
+}
+
+export interface DecoStatus {
+  configured: boolean;
+  running: boolean;
+  needs_password: boolean;
+  host?: string;
+  port?: number;
+  transport?: "ssh" | "luci";
+  email?: string;
+  host_key?: string;
+  discovery?: { model: string; role: string; port: number };
+}
+
+export interface DecoConnect {
+  host: string;
+  port?: number;
+  transport?: "ssh" | "luci";
+  email?: string;
+  password?: string;
 }
