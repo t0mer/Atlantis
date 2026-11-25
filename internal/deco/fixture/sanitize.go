@@ -22,6 +22,8 @@ var (
 	// MACs as AA-BB-.., aa:bb:.., aabb.ccdd.eeff or 12 bare hex digits.
 	macRE  = regexp.MustCompile(`(?i)\b(?:[0-9a-f]{2}[-:][0-9a-f]{2}(?:[-:][0-9a-f]{2}){4}|[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}|[0-9a-f]{12})\b`)
 	ipv4RE = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	// Email addresses (TP-Link ID usernames).
+	emailRE = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
 	// IPv6 candidates; each is validated with net.ParseIP before replacement.
 	ipv6RE = regexp.MustCompile(`(?i)[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}`)
 )
@@ -73,10 +75,12 @@ func isSecretKey(nk string) bool {
 // isIDKey reports keys whose values identify a device, account or person.
 func isIDKey(nk string) bool {
 	switch nk {
-	case "sn", "account", "username", "owner", "ownerid", "tpid", "cloudid", "deviceid", "hwid", "fwid", "oemid":
+	case "sn", "account", "username", "owner", "ownerid", "tpid", "cloudid", "hwid", "fwid", "oemid":
 		return true
 	}
-	for _, s := range []string{"serial", "uuid", "email"} {
+	// Cloud identifiers: deviceId, master_device_id, group_id, accountId,
+	// terminalUUID, termID, ...
+	for _, s := range []string{"serial", "uuid", "email", "deviceid", "groupid", "accountid", "userid", "termid", "terminalid"} {
 		if strings.Contains(nk, s) {
 			return true
 		}
@@ -170,8 +174,9 @@ func (s *Sanitizer) str(key, v string) string {
 	return s.scrubText(v)
 }
 
-// scrubText replaces every MAC and IP address inside s.
+// scrubText replaces every email, MAC and IP address inside s.
 func (s *Sanitizer) scrubText(v string) string {
+	v = emailRE.ReplaceAllString(v, "user@example.com")
 	v = macRE.ReplaceAllStringFunc(v, s.mac)
 	v = ipv4RE.ReplaceAllStringFunc(v, func(m string) string {
 		if ip := net.ParseIP(m); ip != nil {

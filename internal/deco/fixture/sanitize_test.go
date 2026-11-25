@@ -106,6 +106,34 @@ func TestSanitizeReviewLeakCases(t *testing.T) {
 	}
 }
 
+// Identifiers returned by the TP-Link cloud API.
+func TestSanitizeCloudIdentifiers(t *testing.T) {
+	in := `{
+	  "deviceId": "8012ABCDEF0123456789",
+	  "master_device_id": "8012FEDCBA9876543210",
+	  "group_id": "g-55aa77",
+	  "accountId": "acct-4242",
+	  "terminalUUID": "1b2c3d4e-0000-4000-8000-123456789abc",
+	  "termID": "term-31337",
+	  "token": "tok-should-vanish",
+	  "cloudUserName": "someone@example.org",
+	  "note": "owner is other.person@mail.example.net"
+	}`
+	out, err := NewSanitizer().Sanitize(json.RawMessage(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+	for _, leaked := range []string{
+		"8012ABCDEF0123456789", "8012FEDCBA9876543210", "g-55aa77", "acct-4242",
+		"1b2c3d4e", "term-31337", "tok-should-vanish", "someone@", "other.person@",
+	} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("sanitised output still contains %q:\n%s", leaked, got)
+		}
+	}
+}
+
 func TestSanitizeIPReplacementsStayUnique(t *testing.T) {
 	s := NewSanitizer()
 	seen := map[string]string{}
