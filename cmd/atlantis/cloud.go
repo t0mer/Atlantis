@@ -18,6 +18,7 @@ import (
 
 	"github.com/t0mer/atlantis/internal/deco/cloud"
 	"github.com/t0mer/atlantis/internal/deco/fixture"
+	"github.com/t0mer/atlantis/internal/deco/tmpclient"
 	"github.com/t0mer/atlantis/internal/tplinkcloud"
 )
 
@@ -215,7 +216,20 @@ func probeSite(ctx context.Context, acct *tplinkcloud.Client, site tplinkcloud.S
 			fmt.Fprintf(o.errOut, "disconnect: %v\n", err)
 		}
 	}()
+	return readSession(ctx, c, sessionOutput{out: o.out, errOut: o.errOut, dump: o.dump, dumpDir: o.dumpDir})
+}
 
+// sessionOutput is where readSession prints and dumps.
+type sessionOutput struct {
+	out, errOut io.Writer
+	dump        bool
+	dumpDir     string
+}
+
+// readSession runs every allowlisted read on an open session client, prints
+// the redacted results as JSON and optionally dumps sanitised fixtures. It
+// is shared by the cloud and SSH probes.
+func readSession(ctx context.Context, c *tmpclient.Client, o sessionOutput) error {
 	out := map[string]any{}
 	if neg, err := fixture.Redact(c.Negotiation()); err == nil {
 		out["COMP_NEGOTIATE"] = neg
@@ -223,7 +237,7 @@ func probeSite(ctx context.Context, acct *tplinkcloud.Client, site tplinkcloud.S
 	results := map[string]json.RawMessage{}
 	var failed []string
 	run := func(s cloudStep) {
-		raw, err := c.RawParams(ctx, cloud.RawArea, s.op, s.params)
+		raw, err := c.RawParams(ctx, tmpclient.RawArea, s.op, s.params)
 		if err != nil {
 			out[s.file] = map[string]string{"error": err.Error()}
 			failed = append(failed, s.file)
@@ -268,7 +282,7 @@ func probeSite(ctx context.Context, acct *tplinkcloud.Client, site tplinkcloud.S
 		}
 	}
 	if len(failed) > 0 {
-		return fmt.Errorf("cloud probe: %d step(s) failed: %s", len(failed), strings.Join(failed, ", "))
+		return fmt.Errorf("probe: %d step(s) failed: %s", len(failed), strings.Join(failed, ", "))
 	}
 	return nil
 }
