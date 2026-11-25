@@ -171,11 +171,20 @@ func (c *Client) Sites(ctx context.Context) ([]Site, error) {
 // "master" (or that has no feature data) roots a site, and the satellites in
 // its re_list become its nodes (l1.java B0()).
 func buildSites(devs []cloudDevice, feats map[string]feature) []Site {
+	satellite := map[string]bool{}
+	for _, f := range feats {
+		for _, re := range f.Data.ReList {
+			satellite[re.DeviceID] = true
+		}
+	}
 	var sites []Site
 	for _, d := range devs {
 		f, ok := feats[d.DeviceID]
 		if ok && f.Data.Role != "" && !strings.EqualFold(f.Data.Role, "master") {
 			continue // satellites are listed under their master
+		}
+		if satellite[d.DeviceID] && !strings.EqualFold(f.Data.Role, "master") {
+			continue // a satellite without its own mesh data
 		}
 		s := Site{
 			ID:             f.Data.GroupID,
