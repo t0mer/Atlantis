@@ -20,6 +20,7 @@ func main() {
 	}
 	root.AddCommand(newProbeCmd())
 	root.AddCommand(newCloudCmd())
+	root.AddCommand(newSSHCmd())
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the build version",
