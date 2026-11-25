@@ -15,7 +15,7 @@ import (
 
 // clientRenameVerified is set once `atlantis ssh client-rename-probe` has
 // passed on a real Deco (record: testdata/m5/client_rename_probe.json).
-var clientRenameVerified = false
+var clientRenameVerified = true
 
 // renameFields are the fields the app's rename screen copies from the
 // current client into the sparse entry it sends (ClientNameSettingActivity);

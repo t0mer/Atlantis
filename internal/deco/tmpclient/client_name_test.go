@@ -105,3 +105,23 @@ func TestRenameNotShownIsUndone(t *testing.T) {
 		t.Fatalf("the old name must be sent back: %v %v", err, sentClient(t, d)["name"])
 	}
 }
+
+// Renaming may only be marked verified with a passing hardware record.
+func TestClientRenameHasEvidence(t *testing.T) {
+	c := newClient(t, fakedeco.New())
+	if !c.CanRenameClients() {
+		return
+	}
+	b, err := os.ReadFile("testdata/m5/client_rename_probe.json")
+	if err != nil {
+		t.Fatal("renaming is marked verified but there is no probe record")
+	}
+	var rec struct {
+		Result string   `json:"result"`
+		Tried  []string `json:"tried"`
+	}
+	json.Unmarshal(b, &rec)
+	if rec.Result != "pass" || len(rec.Tried) < 2 {
+		t.Fatalf("the probe record does not show a pass for ASCII and Hebrew names: %+v", rec)
+	}
+}

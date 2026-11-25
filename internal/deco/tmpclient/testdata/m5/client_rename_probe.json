@@ -1,0 +1,27 @@
+{
+  "fields": [
+    "access_host",
+    "client_mesh",
+    "client_type",
+    "enable_isolation",
+    "enable_priority",
+    "has_set_client_type",
+    "interface",
+    "ip",
+    "link_priority",
+    "linked_device_info",
+    "mac",
+    "name",
+    "online",
+    "owner_id",
+    "remain_time",
+    "space_id",
+    "time_period",
+    "wire_type"
+  ],
+  "tried": [
+    "ascii",
+    "hebrew"
+  ],
+  "result": "pass"
+}
