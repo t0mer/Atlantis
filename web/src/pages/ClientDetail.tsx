@@ -145,7 +145,7 @@ export function ClientDetail() {
             {mine.slice(0, 12).map((e) => (
               <li key={e.id} className="flex gap-3">
                 <time className="tnum w-36 shrink-0 text-drift">{new Date(e.ts).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}</time>
-                <span dir="auto">{eventText(e, name)}</span>
+                <span>{eventText(e, name)}</span>
               </li>
             ))}
           </ul>

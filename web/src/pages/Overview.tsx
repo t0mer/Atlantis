@@ -103,8 +103,8 @@ export function Overview() {
           <ul className="mt-4 space-y-1.5 border-t border-line pt-3 text-sm">
             {recent.slice(0, 5).map((e) => (
               <li key={e.id} className="flex gap-3">
-                <time className="tnum w-12 shrink-0 text-drift">{new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
-                <span dir="auto">{eventText(e, name)}</span>
+                <time className="tnum w-16 shrink-0 whitespace-nowrap text-drift">{new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+                <span>{eventText(e, name)}</span>
               </li>
             ))}
             {!recent.length && <li className="text-drift">Nothing changed in the last 24 hours.</li>}

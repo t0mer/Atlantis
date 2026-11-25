@@ -117,8 +117,10 @@ export function Clients() {
                   <Link to={`/clients/${encodeURIComponent(c.mac)}`} className="flex items-center gap-2">
                     <StatusMark online={c.online} subject={c.mac} />
                     <span className="min-w-0">
-                      <span dir="auto" className="flex items-center gap-1 truncate font-medium">
-                        {c.display_name}
+                      <span className="flex items-center gap-1 font-medium">
+                        <span dir="auto" className="truncate">
+                          {c.display_name}
+                        </span>
                         {c.watch && <Eye size={13} className="text-lagoon" aria-label="Watched" />}
                       </span>
                       <span className="tnum block text-xs text-drift">

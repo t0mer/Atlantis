@@ -23,6 +23,8 @@ test("bands", () => {
 
 test("event sentences use display names", () => {
   const e = { id: 1, ts: "", type: "client.offline" as const, subject: "aa", payload: {} };
-  expect(eventText(e, () => "Noa's phone")).toBe("Noa's phone went offline");
+  expect(eventText(e, () => "Noa's phone")).toBe("\u2068Noa's phone\u2069 went offline");
+  // A Hebrew name is isolated, so it can't flip the English sentence.
+  expect(eventText(e, () => "הטלפון של נועה")).toBe("\u2068הטלפון של נועה\u2069 went offline");
   expect(sessionSentence({ state: "auth_failed", since: "", logins: 0 }).tone).toBe("bad");
 });

@@ -83,7 +83,9 @@ export function sessionSentence(s: SessionStatus | undefined): { text: string; t
 /** A short sentence for an event; name resolves a subject to a display name. */
 export function eventText(e: DecoEvent, name: (subject: string) => string): string {
   const p = e.payload ?? {};
-  const who = name(e.subject) || String(p.name ?? e.subject);
+  // The sentence is English (LTR); the name may be Hebrew, so it is wrapped
+  // in Unicode isolates (FSI..PDI) and can't reorder the words around it.
+  const who = `\u2068${name(e.subject) || String(p.name ?? e.subject)}\u2069`;
   switch (e.type) {
     case "client.joined":
       return `${who} joined for the first time`;

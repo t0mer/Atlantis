@@ -68,7 +68,7 @@ export function Events() {
               {d.items.map((e) => {
                 const to = link(e);
                 const tone = eventTone(e.type);
-                const text = <span dir="auto">{eventText(e, name)}</span>;
+                const text = <span>{eventText(e, name)}</span>;
                 return (
                   <li key={e.id} className="relative flex gap-4 py-1.5 pl-5 text-sm">
                     <span
@@ -78,7 +78,7 @@ export function Events() {
                         tone === "bad" ? "border-flare" : tone === "warn" ? "border-buoy" : "border-lagoon",
                       )}
                     />
-                    <time className="tnum w-12 shrink-0 text-drift">{new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+                    <time className="tnum w-16 shrink-0 whitespace-nowrap text-drift">{new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
                     {to ? (
                       <Link to={to} className="hover:underline">
                         {text}
