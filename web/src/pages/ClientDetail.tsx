@@ -116,7 +116,11 @@ export function ClientDetail() {
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
-              save({ alias: alias.trim(), tags: tags.split(",").map((t) => t.trim()).filter(Boolean), local_only: localOnly }, "Saved");
+              // Send the name only when it was edited, so saving tags never
+              // renames the device on the Deco.
+              const name = alias.trim();
+              const body = { tags: tags.split(",").map((t) => t.trim()).filter(Boolean) };
+              save(name !== c.alias ? { ...body, alias: name, local_only: localOnly } : body, "Saved");
             }}
           >
             <Field
