@@ -1,0 +1,78 @@
+{
+  "band2_4": {
+    "backhaul": {
+      "channel": 10
+    },
+    "guest": {
+      "access_duration": "14400",
+      "bandwidth_limit": {
+        "downstream_bandwidth": 102400,
+        "enable": false,
+        "upstream_bandwidth": 102400
+      },
+      "enable": false,
+      "encryption_mode": "none",
+      "host_isolation": true,
+      "password": "[redacted]",
+      "ssid": "bmFtZS04"
+    },
+    "host": {
+      "enable": true,
+      "enable_hide_ssid": false,
+      "encryption_mode": "wpa2",
+      "password": "[redacted]",
+      "ssid": "bmFtZS05"
+    },
+    "iot": {
+      "enable": false,
+      "enable_wpa3": false,
+      "encryption_mode": "wpa2+wpa",
+      "password": "[redacted]",
+      "ssid": "bmFtZS0xMA=="
+    },
+    "radio": {
+      "channel": "0",
+      "enable": true,
+      "htmode": "HT40",
+      "hwmode": "11ng"
+    }
+  },
+  "band5_1": {
+    "backhaul": {
+      "channel": 40
+    },
+    "guest": {
+      "access_duration": "14400",
+      "bandwidth_limit": {
+        "downstream_bandwidth": 102400,
+        "enable": false,
+        "upstream_bandwidth": 102400
+      },
+      "enable": false,
+      "encryption_mode": "none",
+      "host_isolation": true,
+      "password": "[redacted]",
+      "ssid": "bmFtZS04"
+    },
+    "host": {
+      "enable": true,
+      "enable_hide_ssid": false,
+      "encryption_mode": "wpa2",
+      "password": "[redacted]",
+      "ssid": "bmFtZS05"
+    },
+    "iot": {
+      "enable": false,
+      "enable_wpa3": false,
+      "encryption_mode": "wpa2+wpa",
+      "password": "[redacted]",
+      "ssid": "bmFtZS0xMA=="
+    },
+    "radio": {
+      "channel": "0",
+      "enable": true,
+      "htmode": "HT80",
+      "hwmode": "11ac"
+    }
+  }
+}

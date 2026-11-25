@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/hex"
+	"math/big"
 	"net/url"
 	"strconv"
 	"strings"
@@ -177,5 +178,63 @@ func TestCredentialHash(t *testing.T) {
 	const want = "70e76a15da00e6301ade718cc9416f79"
 	if got := credentialHash("pw"); got != want {
 		t.Fatalf("credentialHash = %q, want %q", got, want)
+	}
+}
+
+// Some Deco firmware uses 512-bit RSA keys, which crypto/rsa refuses.
+// Encrypt with one and decrypt by hand to check the PKCS#1 v1.5 layout.
+func TestPKCS1v15With512BitKey(t *testing.T) {
+	var p, q *big.Int
+	for {
+		p, _ = rand.Prime(rand.Reader, 256)
+		q, _ = rand.Prime(rand.Reader, 256)
+		if n := new(big.Int).Mul(p, q); n.BitLen() == 512 {
+			break
+		}
+	}
+	n := new(big.Int).Mul(p, q)
+	phi := new(big.Int).Mul(new(big.Int).Sub(p, big.NewInt(1)), new(big.Int).Sub(q, big.NewInt(1)))
+	e := big.NewInt(65537)
+	d := new(big.Int).ModInverse(e, phi)
+	if d == nil {
+		t.Skip("e not invertible for these primes")
+	}
+	pub := &rsa.PublicKey{N: n, E: 65537}
+	msg := []byte("k=1234567890123456&i=1234567890123456")
+	ct, err := rsaEncryptHex(pub, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	for i := 0; i < len(ct); i += 128 { // 64-byte blocks in hex
+		c, _ := new(big.Int).SetString(ct[i:i+128], 16)
+		em := new(big.Int).Exp(c, d, n).FillBytes(make([]byte, 64))
+		if em[0] != 0 || em[1] != 2 {
+			t.Fatalf("bad header %x", em[:2])
+		}
+		sep := bytes.IndexByte(em[2:], 0)
+		if sep < 8 {
+			t.Fatalf("padding too short: %d", sep)
+		}
+		got = append(got, em[2+sep+1:]...)
+	}
+	if !bytes.Equal(got, msg) {
+		t.Fatalf("round trip: %q", got)
+	}
+}
+
+// The hand-rolled padding must stay compatible with crypto/rsa.
+func TestPKCS1v15InteropWithStdlib(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct, err := pkcs1v15Encrypt(&priv.PublicKey, []byte("hello deco"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt, err := rsa.DecryptPKCS1v15(nil, priv, ct)
+	if err != nil || string(pt) != "hello deco" {
+		t.Fatal(pt, err)
 	}
 }

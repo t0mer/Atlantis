@@ -84,9 +84,15 @@ func TestAllowlist(t *testing.T) {
 	if !Allowed(OpDeviceListGet) || !Allowed(OpTokenAlloc) {
 		t.Fatal("read opcodes must be allowed")
 	}
-	for _, op := range []Opcode{0x4008 /* WIRELESS_SET */, 0x4016 /* DEVICE_LIST_REBOOT */, 0x401D /* FW_UPDATE */, 0x43EB /* CONFIG_BACKUP_SET */, 0xC456, 0x00F0} {
+	for _, op := range []Opcode{0x4016 /* DEVICE_LIST_REBOOT */, 0x401D /* FW_UPDATE */, 0x43EB /* CONFIG_BACKUP_SET */, 0xC456, 0x00F0} {
 		if Allowed(op) {
 			t.Errorf("%s must not be allowed", op)
 		}
+	}
+}
+
+func TestWriteOpcodesAreMarked(t *testing.T) {
+	if !IsWrite(OpWirelessSet) || IsWrite(OpWirelessGet) {
+		t.Fatal("IsWrite")
 	}
 }

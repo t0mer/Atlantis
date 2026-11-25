@@ -65,3 +65,7 @@ npm-debug.log*
 *.db-journal
 *.sqlite
 *.sqlite3
+
+# Built UI (Vite outDir); only the placeholder is tracked
+internal/web/dist/*
+!internal/web/dist/placeholder.html

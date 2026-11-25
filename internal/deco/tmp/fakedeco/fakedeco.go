@@ -52,9 +52,13 @@ func New() *Device {
 		replies:  map[uint16][]byte{},
 		requests: map[tmp.Opcode]json.RawMessage{},
 		results: map[tmp.Opcode]any{
-			tmp.OpCompNegotiate: map[string]any{"component_list": []any{}, "operation_mode": "Router"},
+			tmp.OpCompNegotiate:      map[string]any{"component_list": []any{}, "operation_mode": "Router"},
+			tmp.OpClientListGet:      map[string]any{"client_list": []any{}},
+			tmp.OpClientListSpeedGet: map[string]any{"client_list_speed": []any{}},
+			tmp.OpWirelessGet: map[string]any{"band2_4": map[string]any{
+				"host": map[string]any{"enable": true, "ssid": "SG9tZQ==", "password": "c2VjcmV0"}}},
 			tmp.OpDeviceListGet: map[string]any{"device_list": []any{map[string]any{
-				"device_id": "dev-1", "mac": "AA-BB-CC-DD-EE-01", "nickname": "TGl2aW5n", "role": "master",
+				"device_id": "dev-1", "mac": "AA-BB-CC-DD-EE-01", "nickname": "custom", "custom_nickname": "TGl2aW5n", "role": "master",
 			}}},
 		},
 	}
@@ -180,6 +184,11 @@ func (d *Device) execute(op tmp.Opcode, body []byte) ([]byte, byte) {
 	}
 	d.seen = append(d.seen, op)
 	d.requests[op] = append(json.RawMessage(nil), body...)
+	if op == tmp.OpWirelessSet {
+		d.applyWirelessSet(body)
+		b, _ := json.Marshal(map[string]any{"error_code": 0, "result": map[string]any{}})
+		return b, 0
+	}
 	res, ok := d.results[op]
 	if !ok {
 		b, _ := json.Marshal(map[string]any{"error_code": -40101, "msg": "unsupported"})
@@ -243,4 +252,37 @@ func (d *Device) Relay(deviceID string, requestData json.RawMessage) (any, error
 		}
 	}
 	return map[string]any{"err_code": 0}, nil
+}
+
+// applyWirelessSet merges a WIRELESS_SET's params into the WIRELESS_GET
+// result, network by network, as the device does.
+func (d *Device) applyWirelessSet(body []byte) {
+	var req struct {
+		Params map[string]map[string]map[string]any `json:"params"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return
+	}
+	cur, _ := d.results[tmp.OpWirelessGet].(map[string]any)
+	if cur == nil {
+		cur = map[string]any{}
+	}
+	for band, nets := range req.Params {
+		b, _ := cur[band].(map[string]any)
+		if b == nil {
+			b = map[string]any{}
+		}
+		for name, fields := range nets {
+			n, _ := b[name].(map[string]any)
+			if n == nil {
+				n = map[string]any{}
+			}
+			for k, v := range fields {
+				n[k] = v
+			}
+			b[name] = n
+		}
+		cur[band] = b
+	}
+	d.results[tmp.OpWirelessGet] = cur
 }

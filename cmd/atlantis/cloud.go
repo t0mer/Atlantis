@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/deco/cloud"
 	"github.com/t0mer/atlantis/internal/deco/fixture"
 	"github.com/t0mer/atlantis/internal/deco/tmpclient"
@@ -24,7 +25,7 @@ import (
 
 type cloudProbeOptions struct {
 	email, site, dumpDir, terminalFile, caFile string
-	dump, debug                                bool
+	dump, debug, typed                         bool
 
 	// Set by tests only; there are no flags for these.
 	bootstrapURL string
@@ -82,6 +83,7 @@ replaced), as a test fixture.`,
 	f.StringVar(&o.site, "site", "", "site ID from the list to read; omit to only list sites")
 	f.BoolVar(&o.dump, "dump", false, "write sanitised response fixtures (needs --site)")
 	f.BoolVar(&o.debug, "debug", false, "print cloud relay status codes (never tokens or data)")
+	f.BoolVar(&o.typed, "typed", false, "print the parsed models instead of raw replies")
 	f.StringVar(&o.dumpDir, "dump-dir", "internal/deco/cloud/testdata", "directory for --dump fixtures")
 	f.StringVar(&o.terminalFile, "terminal-file", "", "where the installation's terminal ID is kept (default: user config dir)")
 	f.StringVar(&o.caFile, "ca-file", "", "extra PEM root certificates for the cloud TLS connection (default: "+caFileName+" in the user config dir, if present)")
@@ -221,13 +223,13 @@ func probeSite(ctx context.Context, acct *tplinkcloud.Client, site tplinkcloud.S
 			fmt.Fprintf(o.errOut, "disconnect: %v\n", err)
 		}
 	}()
-	return readSession(ctx, c, sessionOutput{out: o.out, errOut: o.errOut, dump: o.dump, dumpDir: o.dumpDir})
+	return readSession(ctx, c, sessionOutput{out: o.out, errOut: o.errOut, dump: o.dump, dumpDir: o.dumpDir, typed: o.typed})
 }
 
 // sessionOutput is where readSession prints and dumps.
 type sessionOutput struct {
 	out, errOut io.Writer
-	dump        bool
+	dump, typed bool
 	dumpDir     string
 }
 
@@ -235,6 +237,9 @@ type sessionOutput struct {
 // the redacted results as JSON and optionally dumps sanitised fixtures. It
 // is shared by the cloud and SSH probes.
 func readSession(ctx context.Context, c *tmpclient.Client, o sessionOutput) error {
+	if o.typed {
+		return printTyped(ctx, c, o)
+	}
 	out := map[string]any{}
 	if neg, err := fixture.Redact(c.Negotiation()); err == nil {
 		out["COMP_NEGOTIATE"] = neg
@@ -260,6 +265,7 @@ func readSession(ctx context.Context, c *tmpclient.Client, o sessionOutput) erro
 		{"WIRELESS_GET", "WIRELESS_GET", nil},
 		{"FW_LATEST_GET", "FW_LATEST_GET", nil},
 		{"BLOCKED_LIST_GET", "BLOCKED_LIST_GET", nil},
+		{"DEVICE_RESOURCE_LIST_GET", "DEVICE_RESOURCE_LIST_GET", nil},
 	}
 	if master != "" {
 		steps = append(steps, cloudStep{"DEVICE_RESOURCE_INFO_GET", "DEVICE_RESOURCE_INFO_GET",
@@ -400,4 +406,43 @@ func readSecret(raw io.Reader, buffered *bufio.Reader, prompt io.Writer, label s
 		return "", errors.New("no password: set ATLANTIS_CLOUD_PASSWORD or run in a terminal")
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// printTyped prints the transport-agnostic models, as the dashboard will
+// use them. Unsupported reads are reported, not failed.
+func printTyped(ctx context.Context, c *tmpclient.Client, o sessionOutput) error {
+	out := map[string]any{}
+	var failed []string
+	add := func(name string, v any, err error) {
+		switch {
+		case errors.Is(err, deco.ErrUnsupported):
+			out[name] = "unsupported by this Deco"
+		case err != nil:
+			out[name] = map[string]string{"error": err.Error()}
+			failed = append(failed, name)
+		default:
+			out[name] = v
+		}
+	}
+	devs, err := c.Devices(ctx)
+	add("devices", devs, err)
+	cls, err := c.Clients(ctx, "")
+	add("clients", cls, err)
+	wl, err := c.Wireless(ctx)
+	add("wireless", wl, err)
+	fw, err := c.Firmware(ctx)
+	add("firmware", fw, err)
+	wan, err := c.WAN(ctx)
+	add("wan", wan, err)
+	perf, err := c.Performance(ctx)
+	add("performance", perf, err)
+	enc := json.NewEncoder(o.out)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		return err
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("probe: %d typed read(s) failed: %s", len(failed), strings.Join(failed, ", "))
+	}
+	return nil
 }

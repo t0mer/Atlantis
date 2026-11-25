@@ -23,7 +23,7 @@ type sshProbeOptions struct {
 	host, email, hostKey, username, dumpDir, knownHosts string
 	port                                                int
 	rawUsername, associate, shared                      bool
-	dump, debug, skipTDP, acceptNew                     bool
+	dump, debug, skipTDP, acceptNew, typed              bool
 
 	password    string
 	in          io.Reader
@@ -33,6 +33,7 @@ type sshProbeOptions struct {
 func newSSHCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "ssh", Short: "Reach a Deco on the LAN over SSH with the TP-Link ID, like the Deco app"}
 	cmd.AddCommand(newSSHProbeCmd())
+	cmd.AddCommand(newSSHSetWiFiCmd())
 	return cmd
 }
 
@@ -78,11 +79,27 @@ it; trusted keys are kept in ssh_known_hosts in the user config dir.`,
 	f.BoolVar(&o.dump, "dump", false, "write sanitised response fixtures")
 	f.StringVar(&o.dumpDir, "dump-dir", "internal/deco/tmpclient/testdata", "directory for --dump fixtures")
 	f.BoolVar(&o.debug, "debug", false, "print discovery and transport details (never secrets)")
+	f.BoolVar(&o.typed, "typed", false, "print the parsed models instead of raw replies")
 	_ = cmd.MarkFlagRequired("host")
 	return cmd
 }
 
 func runSSHProbe(ctx context.Context, o sshProbeOptions) error {
+	c, err := sshSession(ctx, o)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := c.Logout(ctx); err != nil {
+			fmt.Fprintf(o.errOut, "disconnect: %v\n", err)
+		}
+	}()
+	return readSession(ctx, c, sessionOutput{out: o.out, errOut: o.errOut, dump: o.dump, dumpDir: o.dumpDir, typed: o.typed})
+}
+
+// sshSession discovers the Deco, checks its host key and opens a logged-in
+// session client. The caller must Logout.
+func sshSession(ctx context.Context, o sshProbeOptions) (*tmpclient.Client, error) {
 	logf := func(string, ...any) {}
 	if o.debug {
 		logf = func(f string, a ...any) { fmt.Fprintf(o.errOut, "debug: "+f+"\n", a...) }
@@ -116,7 +133,7 @@ func runSSHProbe(ctx context.Context, o sshProbeOptions) error {
 	hostID := fmt.Sprintf("%s:%d", o.host, port)
 	khPath, err := knownHostsPath(o.knownHosts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pin := o.hostKey
 	if pin == "" {
@@ -127,14 +144,14 @@ func runSSHProbe(ctx context.Context, o sshProbeOptions) error {
 		_, err := sshconn.Dial(ctx, sshconn.Options{Host: o.host, Port: port, User: user, TPSBanner: tps,
 			OnHostKey: func(fp string) { fmt.Fprintf(o.errOut, "SSH host key of %s: %s\n", hostID, fp) }})
 		if errors.Is(err, sshconn.ErrUnknownHostKey) {
-			return errors.New("unknown SSH host key: check the fingerprint above, then re-run with --accept-new-host-key")
+			return nil, errors.New("unknown SSH host key: check the fingerprint above, then re-run with --accept-new-host-key")
 		}
-		return fmt.Errorf("reading the SSH host key of %s: %w", hostID, err)
+		return nil, fmt.Errorf("reading the SSH host key of %s: %w", hostID, err)
 	}
 
 	if o.password == "" {
 		if o.password, err = readSecret(o.in, bufio.NewReader(o.in), o.errOut, "TP-Link ID password: "); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -156,16 +173,11 @@ func runSSHProbe(ctx context.Context, o sshProbeOptions) error {
 	})
 	if err := c.Login(ctx); err != nil {
 		if errors.Is(err, sshconn.ErrAuthFailed) {
-			return fmt.Errorf("%w\nCheck the password (and try --raw-username or --username) before retrying: the Deco locks out after repeated failures", err)
+			return nil, fmt.Errorf("%w\nCheck the password (and try --raw-username or --username) before retrying: the Deco locks out after repeated failures", err)
 		}
-		return fmt.Errorf("connecting to %s over SSH: %w", o.host, err)
+		return nil, fmt.Errorf("connecting to %s over SSH: %w", o.host, err)
 	}
-	defer func() {
-		if err := c.Logout(ctx); err != nil {
-			fmt.Fprintf(o.errOut, "disconnect: %v\n", err)
-		}
-	}()
-	return readSession(ctx, c, sessionOutput{out: o.out, errOut: o.errOut, dump: o.dump, dumpDir: o.dumpDir})
+	return c, nil
 }
 
 // knownHostsPath returns the trusted host keys file.
@@ -206,4 +218,51 @@ func saveHostKey(path, hostID, fp string) error {
 	defer f.Close()
 	_, err = fmt.Fprintf(f, "%s %s\n", hostID, fp)
 	return err
+}
+
+func newSSHSetWiFiCmd() *cobra.Command {
+	var o sshProbeOptions
+	var ssid string
+	cmd := &cobra.Command{
+		Use:   "set-wifi",
+		Short: "Change the main Wi-Fi network's SSID and password on a Deco",
+		Long: `Sets the main (host) network's SSID and password on every band, keeping
+its other settings, and reads the result back. The new Wi-Fi password is read
+from ATLANTIS_WIFI_PASSWORD, never from a flag. Every device on the main
+network disconnects until it reconnects with the new details.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if o.email == "" {
+				o.email = os.Getenv("ATLANTIS_CLOUD_EMAIL")
+			}
+			wifiPass := os.Getenv("ATLANTIS_WIFI_PASSWORD")
+			if wifiPass == "" {
+				return errors.New("set the new Wi-Fi password in ATLANTIS_WIFI_PASSWORD")
+			}
+			o.password = os.Getenv("ATLANTIS_CLOUD_PASSWORD")
+			o.in, o.out, o.errOut = os.Stdin, os.Stdout, os.Stderr
+			ctx := cmd.Context()
+			c, err := sshSession(ctx, o)
+			if err != nil {
+				return err
+			}
+			defer c.Logout(ctx)
+			ch, err := c.SetHostWiFi(ctx, ssid, wifiPass)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(o.out, "Main Wi-Fi is now %q on %s (confirmed by reading it back).\n", ssid, strings.Join(ch, ", "))
+			return nil
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&o.host, "host", "", "Deco IP address on the LAN (required)")
+	f.StringVar(&o.email, "email", "", "TP-Link ID email (or ATLANTIS_CLOUD_EMAIL)")
+	f.StringVar(&o.hostKey, "host-key", "", "expected SSH host key fingerprint (SHA256:...)")
+	f.StringVar(&o.knownHosts, "known-hosts", "", "trusted host keys file (default: ssh_known_hosts in the user config dir)")
+	f.IntVar(&o.port, "port", 0, "SSH port (default: from TDP, else 20001)")
+	f.StringVar(&ssid, "ssid", "", "new SSID (required)")
+	f.BoolVar(&o.debug, "debug", false, "print discovery and transport details (never secrets)")
+	_ = cmd.MarkFlagRequired("host")
+	_ = cmd.MarkFlagRequired("ssid")
+	return cmd
 }

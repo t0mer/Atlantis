@@ -1,0 +1,44 @@
+{
+  "device_list": [
+    {
+      "bssid_2g": "name-1",
+      "bssid_5g": "name-2",
+      "bssid_sta_2g": "",
+      "bssid_sta_5g": "",
+      "connection_type": [],
+      "custom_nickname": "bmFtZS0z",
+      "device_id": "[redacted]",
+      "device_model": "M5",
+      "device_type": "HOMEWIFISYSTEM",
+      "group_status": "connected",
+      "hardware_ver": "3.2",
+      "hw_id": "[redacted]",
+      "inet_error_msg": "well",
+      "inet_status": "online",
+      "ip": "198.18.0.1",
+      "mac": "02-00-00-00-00-01",
+      "master_device_id": "[redacted]",
+      "nand_flash": false,
+      "nickname": "name-4",
+      "oem_id": "[redacted]",
+      "oversized_firmware": false,
+      "owner_transfer": true,
+      "parent_device_id": "[redacted]",
+      "product_level": 200,
+      "role": "master",
+      "set_gateway_support": true,
+      "signal_level": {
+        "band2_4": "0",
+        "band5": "0"
+      },
+      "software_ver": "1.9.1 Build 20250909 Rel. 37570",
+      "speed_diagnose": false,
+      "speed_get_support": true,
+      "support_plc": false,
+      "topology": {
+        "auto": true,
+        "device_id": ""
+      }
+    }
+  ]
+}

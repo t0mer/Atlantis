@@ -21,6 +21,9 @@ func main() {
 	root.AddCommand(newProbeCmd())
 	root.AddCommand(newCloudCmd())
 	root.AddCommand(newSSHCmd())
+	root.AddCommand(newServeCmd())
+	root.AddCommand(newKeygenCmd())
+	root.AddCommand(newHealthcheckCmd())
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the build version",
