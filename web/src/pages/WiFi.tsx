@@ -16,7 +16,8 @@ const securityNames: Record<string, string> = {
   "wpa2+wpa3": "WPA2/WPA3",
 };
 const securityLabel = (m: string) => securityNames[m] ?? m ?? "—";
-const securityChoices = ["wpa2", "wpa2+wpa", "none"];
+// Only the values verified on a Deco (the server refuses others).
+const securityChoices = ["wpa2", "none"];
 
 const what: Record<string, string> = {
   host: "Your devices' everyday network.",

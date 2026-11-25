@@ -26,6 +26,12 @@ var verifiedWrites = map[string][]string{
 	"guest": {deco.FieldEnable, deco.FieldSSID, deco.FieldPassword, deco.FieldEncryption},
 }
 
+// verifiedEncryption are the security values proven per network; a field
+// being verified is not enough, each value is sent only once proven.
+var verifiedEncryption = map[string][]string{
+	"guest": {"none", "wpa2"},
+}
+
 // Editable reports the verified fields per network.
 func (c *Client) Editable() map[string][]string {
 	out := make(map[string][]string, len(verifiedWrites))
@@ -41,12 +47,19 @@ var encryptionModes = []string{"none", "psk", "wpa2", "wpa2+wpa", "wpa3", "wpa2+
 // networks a patch may target; the device's keys.
 var patchNetworks = []string{"host", "guest", "iot"}
 
-// SetNetwork changes one Wi-Fi network: only fields verified on hardware.
+// SetNetwork changes one Wi-Fi network: only fields and values verified on
+// hardware, on every band at once (the shape the probes proved).
 func (c *Client) SetNetwork(ctx context.Context, p deco.WirelessPatch) ([]string, error) {
 	for _, f := range p.Fields() {
 		if !slices.Contains(verifiedWrites[p.Network], f) {
 			return nil, fmt.Errorf("%w: %s %s", deco.ErrNotVerified, networkName(p.Network), f)
 		}
+	}
+	if p.Encryption != nil && !slices.Contains(verifiedEncryption[p.Network], *p.Encryption) {
+		return nil, fmt.Errorf("%w: %s security %q", deco.ErrNotVerified, networkName(p.Network), *p.Encryption)
+	}
+	if len(p.Bands) > 0 {
+		return nil, fmt.Errorf("%w: changing a single band", deco.ErrNotVerified)
 	}
 	return c.setNetwork(ctx, p)
 }
@@ -91,7 +104,7 @@ func (c *Client) setNetwork(ctx context.Context, p deco.WirelessPatch) ([]string
 	if len(bands) == 0 {
 		return nil, fmt.Errorf("tmpclient: the device reports no %s Wi-Fi network", networkName(p.Network))
 	}
-	params := map[string]any{}
+	params, orig := map[string]any{}, map[string]any{}
 	for _, band := range bands {
 		net, ok := deco.ParseObj(top.Obj(band)[p.Network])
 		if !ok {
@@ -102,6 +115,7 @@ func (c *Client) setNetwork(ctx context.Context, p deco.WirelessPatch) ([]string
 			return nil, deco.Invalid("%s: %s", band, err.Error())
 		}
 		params[band] = map[string]any{p.Network: out}
+		orig[band] = map[string]any{p.Network: net}
 	}
 	if _, err := c.request(ctx, tmp.OpWirelessSet, params); err != nil {
 		return nil, fmt.Errorf("setting Wi-Fi: %w", err)
@@ -114,7 +128,11 @@ func (c *Client) setNetwork(ctx context.Context, p deco.WirelessPatch) ([]string
 	check, _ := deco.ParseObj(after)
 	for _, band := range bands {
 		if err := confirm(check.Obj(band).Obj(p.Network), p); err != nil {
-			return nil, fmt.Errorf("the device accepted the change but %s %s", band, err)
+			// Half-applied or rejected: put the previous settings back.
+			if _, rerr := c.request(ctx, tmp.OpWirelessSet, orig); rerr != nil {
+				return nil, fmt.Errorf("the device accepted the change but %s %s, and restoring the previous settings failed: %v", band, err, rerr)
+			}
+			return nil, fmt.Errorf("the device accepted the change but %s %s; the previous settings were restored", band, err)
 		}
 	}
 	sort.Strings(bands)
@@ -181,6 +199,10 @@ func confirm(n deco.Obj, p deco.WirelessPatch) error {
 	}
 	return nil
 }
+
+// ValidatePatch checks a patch without sending it (the probe validates its
+// restore before changing anything).
+func ValidatePatch(p deco.WirelessPatch) error { return validatePatch(p) }
 
 func validatePatch(p deco.WirelessPatch) error {
 	if !slices.Contains(patchNetworks, p.Network) {
