@@ -104,7 +104,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("poll.fast", 30*time.Second)
 	v.SetDefault("poll.slow", 5*time.Minute)
 	v.SetDefault("poll.offline_after_misses", 2)
-	v.SetDefault("store.path", "/data/atlantis.db")
+	// Relative to the working directory: /data in the container image,
+	// next to the binary otherwise. The secret key file goes beside it.
+	v.SetDefault("store.path", "atlantis.db")
 	v.SetDefault("store.raw_retention", 168*time.Hour)
 	v.SetDefault("store.rollup_retention", 2160*time.Hour)
 	v.SetDefault("metrics.enabled", true)

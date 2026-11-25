@@ -228,6 +228,9 @@ func openBox(ctx context.Context, cfg *config.Config, st *store.Store, log *slog
 	if err != nil {
 		return nil, err
 	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
 	if created {
 		log.Warn("created a new secret key; back it up together with the database", "path", path)
 	} else {

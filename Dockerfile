@@ -30,6 +30,9 @@ COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build /out/atlantis /atlantis
 COPY --from=build --chown=65532:65532 /out/data /data
 USER 65532:65532
+# The database (atlantis.db) and, without ATLANTIS_SECRET_KEY, the key file
+# (secret.key) are created here: mount a volume to keep them.
+WORKDIR /data
 EXPOSE 8080
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/atlantis", "healthcheck"]
