@@ -50,8 +50,12 @@ func New(account *tplinkcloud.Client, site tplinkcloud.Site) *Client {
 func (c *Client) Login(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.sess != nil {
+	if c.sess != nil && c.sess.Err() == nil {
 		return nil
+	}
+	if c.sess != nil { // dead session: release it before reconnecting
+		c.sess.Close()
+		c.sess = nil
 	}
 	conn, err := ata.Dial(ctx, c.account, c.site.AppServerURL, c.site.MasterDeviceID)
 	if err != nil {
@@ -76,17 +80,19 @@ func (c *Client) Negotiation() json.RawMessage {
 // Logout frees the session token and disconnects the relay.
 func (c *Client) Logout(context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.sess == nil {
+	sess := c.sess
+	c.sess = nil
+	c.mu.Unlock()
+	if sess == nil {
 		return nil
 	}
-	err := c.sess.Close()
-	c.sess = nil
-	return err
+	return sess.Close() // outside c.mu: Close may wait briefly for a request
 }
 
-// Request runs an allowlisted opcode, opening a session if needed. A
-// session the device closed (bye) is dropped and reopened once.
+// Request runs an allowlisted opcode, opening a session if needed. When the
+// session dies (relay error, broken stream, device bye) it is reopened once,
+// except when the device ended it because of its session limits: then
+// reconnecting would only fight the Deco app for the slot.
 func (c *Client) Request(ctx context.Context, op tmp.Opcode, params any) (json.RawMessage, error) {
 	for attempt := 0; ; attempt++ {
 		if err := c.Login(ctx); err != nil {
@@ -95,14 +101,27 @@ func (c *Client) Request(ctx context.Context, op tmp.Opcode, params any) (json.R
 		c.mu.Lock()
 		sess := c.sess
 		c.mu.Unlock()
-		res, err := sess.Request(ctx, op, params)
-		var bye tmp.ByeError
-		if errors.As(err, &bye) && attempt == 0 && bye.Reason != 3 && bye.Reason != 7 && bye.Reason != 16 {
-			c.Logout(ctx) // reconnect, except when we were pushed out by session limits
-			continue
+		if sess == nil {
+			return nil, tmp.ErrSessionClosed // logged out concurrently
 		}
-		return res, err
+		res, err := sess.Request(ctx, op, params)
+		if err == nil || sess.Err() == nil || attempt > 0 || sessionLimited(sess.Err()) {
+			return res, err
+		}
 	}
+}
+
+// sessionLimited reports a bye caused by the device's admin-session limits.
+func sessionLimited(err error) bool {
+	var bye tmp.ByeError
+	if !errors.As(err, &bye) {
+		return false
+	}
+	switch bye.Reason {
+	case 3, 7, 16: // client limit, user count exceeded, kicked out
+		return true
+	}
+	return false
 }
 
 // Raw runs a read-only opcode by name (area "tmp") and returns its result

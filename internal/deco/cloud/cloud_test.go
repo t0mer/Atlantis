@@ -94,3 +94,16 @@ func TestTypedReadsNotImplementedYet(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestReconnectsAfterRelayFailure(t *testing.T) {
+	c, dev, _ := setup(t)
+	ctx := context.Background()
+	defer c.Logout(ctx)
+	if _, err := c.Raw(ctx, cloud.RawArea, "DEVICE_LIST_GET"); err != nil {
+		t.Fatal(err)
+	}
+	dev.FailRelayOnce()
+	if _, err := c.Raw(ctx, cloud.RawArea, "DEVICE_LIST_GET"); err != nil {
+		t.Fatalf("should reconnect once after the relay dropped: %v", err)
+	}
+}

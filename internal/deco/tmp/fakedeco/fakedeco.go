@@ -31,7 +31,12 @@ type Device struct {
 	expireOne bool
 	tokenOK   bool
 	stall     tmp.Opcode
+	relayFail bool
 }
+
+// FailRelayOnce makes the next relay TRANSFER fail with "device not
+// connected", which ends the client's relay connection.
+func (d *Device) FailRelayOnce() { d.mu.Lock(); d.relayFail = true; d.mu.Unlock() }
 
 // Stall makes the device never answer pulls for op.
 func (d *Device) Stall(op tmp.Opcode) { d.mu.Lock(); d.stall = op; d.mu.Unlock() }
@@ -208,6 +213,16 @@ func (d *Device) Relay(deviceID string, requestData json.RawMessage) (any, error
 	}
 	switch req.Method {
 	case "TRANSFER":
+		d.mu.Lock()
+		fail := d.relayFail
+		d.relayFail = false
+		d.mu.Unlock()
+		if fail {
+			d.mu.Lock()
+			d.buf, d.tokenOK = nil, false // the relay session is gone
+			d.mu.Unlock()
+			return map[string]any{"err_code": 4}, nil
+		}
 		in, err := base64.StdEncoding.DecodeString(req.RawData)
 		if err != nil {
 			return map[string]any{"err_code": 2}, nil
