@@ -13,3 +13,11 @@ func TestNormalizeMAC(t *testing.T) {
 		}
 	}
 }
+
+// Seen live: a unit without mesh feature data is named by its base64 alias.
+func TestBuildSitesDecodesBase64Alias(t *testing.T) {
+	sites := buildSites([]cloudDevice{{DeviceID: "d1", Alias: "TWFtYWQ="}}, nil)
+	if len(sites) != 1 || sites[0].Name != "Mamad" || sites[0].ID != "d1" {
+		t.Fatalf("%+v", sites)
+	}
+}

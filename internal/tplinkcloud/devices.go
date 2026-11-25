@@ -183,7 +183,7 @@ func buildSites(devs []cloudDevice, feats map[string]feature) []Site {
 			OperationMode:  f.TMPData.OperationMode,
 			Nodes: []Node{{
 				DeviceID: d.DeviceID, MAC: normalizeMAC(d.DeviceMAC), Model: d.DeviceModel,
-				Name: firstNonEmpty(d.Alias, d.DeviceName), Master: true,
+				Name: firstNonEmpty(decodeB64(d.Alias), decodeB64(d.DeviceName)), Master: true,
 			}},
 		}
 		if s.ID == "" {
