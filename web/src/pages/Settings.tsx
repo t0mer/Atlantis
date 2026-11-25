@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useChannelMutations, useChannels, useSession, useSessionActions, useSettings, type ChannelInput } from "../api/hooks";
 import type { Channel, EventType } from "../api/types";
 import { Button, Confirm, Dialog, Empty, ErrorNote, Field, Input, PageTitle, Panel, Switch, inputClass, sessionDot, useToast } from "../components/ui";
-import { ago, sessionSentence } from "../lib/format";
+import { ago, goDuration, sessionSentence } from "../lib/format";
 
 const eventNames: Record<EventType, string> = {
   "client.joined": "A new device joins for the first time",
@@ -247,11 +247,11 @@ export function Settings() {
         ["Deco address", `${s.deco.host}${s.deco.port ? `:${s.deco.port}` : ""}`],
         ["Connection", s.deco.transport],
         ["TP-Link account", s.deco.email || "—"],
-        ["Device check", `every ${s.poll.fast}`],
-        ["Mesh check", `every ${s.poll.slow}`],
+        ["Device check", `every ${goDuration(s.poll.fast)}`],
+        ["Mesh check", `every ${goDuration(s.poll.slow)}`],
         ["Offline after", `${s.poll.offline_after_misses} missed checks`],
-        ["Keep raw samples", s.store.raw_retention],
-        ["Keep hourly history", s.store.rollup_retention],
+        ["Keep raw samples", goDuration(s.store.raw_retention)],
+        ["Keep hourly history", goDuration(s.store.rollup_retention)],
         ["Prometheus metrics", s.metrics.enabled ? `${s.metrics.path} (per-device: ${s.metrics.per_client})` : "off"],
         ["Quiet hours", s.notify.quiet_hours ? `${s.notify.quiet_hours} (${s.notify.timezone})` : "none"],
         ["Version", s.version],

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { ago, bandLabel, eventText, rate, sessionSentence } from "./format";
+import { ago, bandLabel, eventText, goDuration, rate, sessionSentence } from "./format";
 
 test("rate", () => {
   expect(rate(0)).toBe("0");
@@ -27,4 +27,13 @@ test("event sentences use display names", () => {
   // A Hebrew name is isolated, so it can't flip the English sentence.
   expect(eventText(e, () => "הטלפון של נועה")).toBe("\u2068הטלפון של נועה\u2069 went offline");
   expect(sessionSentence({ state: "auth_failed", since: "", logins: 0 }).tone).toBe("bad");
+});
+
+test("goDuration reads Go durations", () => {
+  expect(goDuration("168h0m0s")).toBe("7 days");
+  expect(goDuration("24h0m0s")).toBe("1 day");
+  expect(goDuration("5m0s")).toBe("5 minutes");
+  expect(goDuration("1h30m0s")).toBe("90 minutes");
+  expect(goDuration("10s")).toBe("10 seconds");
+  expect(goDuration("odd")).toBe("odd");
 });

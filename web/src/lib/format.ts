@@ -112,3 +112,15 @@ export function eventText(e: DecoEvent, name: (subject: string) => string): stri
 
 export const eventTone = (t: string): "ok" | "warn" | "bad" =>
   t.endsWith(".offline") || t === "wan.down" ? "bad" : t === "client.joined" || t === "firmware.changed" ? "warn" : "ok";
+
+/** "168h0m0s" (a Go duration) → "7 days"; "5m0s" → "5 minutes". */
+export function goDuration(d: string): string {
+  const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/.exec(d);
+  if (!m || !d) return d;
+  const secs = Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
+  const unit = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  if (secs % 86400 === 0) return unit(secs / 86400, "day");
+  if (secs % 3600 === 0) return unit(secs / 3600, "hour");
+  if (secs % 60 === 0) return unit(secs / 60, "minute");
+  return unit(secs, "second");
+}
