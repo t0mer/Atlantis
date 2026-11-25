@@ -23,7 +23,7 @@ type sshProbeOptions struct {
 	host, email, hostKey, username, dumpDir, knownHosts string
 	port                                                int
 	rawUsername, associate, shared                      bool
-	dump, debug, skipTDP, acceptNew                     bool
+	dump, debug, skipTDP, acceptNew, typed              bool
 
 	password    string
 	in          io.Reader
@@ -79,6 +79,7 @@ it; trusted keys are kept in ssh_known_hosts in the user config dir.`,
 	f.BoolVar(&o.dump, "dump", false, "write sanitised response fixtures")
 	f.StringVar(&o.dumpDir, "dump-dir", "internal/deco/tmpclient/testdata", "directory for --dump fixtures")
 	f.BoolVar(&o.debug, "debug", false, "print discovery and transport details (never secrets)")
+	f.BoolVar(&o.typed, "typed", false, "print the parsed models instead of raw replies")
 	_ = cmd.MarkFlagRequired("host")
 	return cmd
 }
@@ -93,7 +94,7 @@ func runSSHProbe(ctx context.Context, o sshProbeOptions) error {
 			fmt.Fprintf(o.errOut, "disconnect: %v\n", err)
 		}
 	}()
-	return readSession(ctx, c, sessionOutput{out: o.out, errOut: o.errOut, dump: o.dump, dumpDir: o.dumpDir})
+	return readSession(ctx, c, sessionOutput{out: o.out, errOut: o.errOut, dump: o.dump, dumpDir: o.dumpDir, typed: o.typed})
 }
 
 // sshSession discovers the Deco, checks its host key and opens a logged-in
