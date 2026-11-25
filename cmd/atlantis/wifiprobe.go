@@ -88,8 +88,8 @@ type probeRecord struct {
 	Network string         `json:"network"`
 	Field   string         `json:"field"`
 	Before  map[string]any `json:"before"`
-	Change  wifiStep      `json:"change"`
-	Restore wifiStep      `json:"restore"`
+	Change  wifiStep       `json:"change"`
+	Restore wifiStep       `json:"restore"`
 	Result  string         `json:"result"`
 }
 

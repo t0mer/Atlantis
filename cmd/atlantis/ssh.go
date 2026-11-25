@@ -35,6 +35,7 @@ func newSSHCmd() *cobra.Command {
 	cmd.AddCommand(newSSHProbeCmd())
 	cmd.AddCommand(newSSHSetWiFiCmd())
 	cmd.AddCommand(newSSHWiFiProbeCmd())
+	cmd.AddCommand(newSSHClientRenameProbeCmd())
 	return cmd
 }
 
