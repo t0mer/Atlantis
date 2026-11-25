@@ -323,10 +323,26 @@ paths:
       responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Event" } } } } } }
   /api/v1/settings:
     get:
-      summary: Effective configuration (no secrets)
-      responses: { "200": { description: OK } }
+      summary: All settings. Sections edited in the UI report source ui or config (YAML/environment defaults); secrets are never returned, only token_set / api_key_set. startup lists what is fixed when Atlantis starts.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  poll: { type: object }
+                  history: { type: object, properties: { raw_retention: { type: string }, rollup_retention: { type: string }, source: { type: string } } }
+                  metrics: { type: object, properties: { enabled: { type: boolean }, path: { type: string }, per_client: { type: string }, token_set: { type: boolean }, source: { type: string } } }
+                  notifications: { type: object, properties: { quiet_hours: { type: string }, timezone: { type: string }, events: { type: array, items: { type: string } }, source: { type: string } } }
+                  openwa: { type: object, properties: { url: { type: string }, default_chat: { type: string }, api_key_set: { type: boolean }, source: { type: string } } }
+                  access: { type: object, properties: { base_url: { type: string }, source: { type: string } } }
+                  logging: { type: object, properties: { level: { type: string }, source: { type: string } } }
+                  debug: { type: object, properties: { enabled: { type: boolean }, source: { type: string } } }
+                  startup: { type: object, properties: { listen: { type: string }, data_path: { type: string }, key_source: { type: string }, log_format: { type: string } } }
     put:
-      summary: Change the refresh intervals; they apply at once and override the configuration. Other settings stay in YAML or the environment.
+      summary: Change any sections; they apply at once and override the configuration. All sections are checked before any is saved.
       security: [ { session: [], csrf: [] } ]
       requestBody:
         required: true
@@ -334,16 +350,40 @@ paths:
           application/json:
             schema:
               type: object
-              required: [poll]
               properties:
                 poll:
                   type: object
-                  required: [fast, slow, offline_after_misses]
                   properties:
-                    fast: { type: string, example: 30s, description: Device check (clients and load), 10s to 1h }
-                    slow: { type: string, example: 5m, description: Mesh check (Decos, internet, Wi-Fi, firmware), 10s to 1h and not shorter than fast }
+                    fast: { type: string, example: 30s, description: Device check, 10s to 1h }
+                    slow: { type: string, example: 5m, description: Mesh check, 10s to 1h and not shorter than fast }
                     offline_after_misses: { type: integer, minimum: 1, maximum: 10 }
-      responses: { "200": { description: The effective settings }, "400": { description: Invalid intervals } }
+                history:
+                  type: object
+                  properties:
+                    raw_retention: { type: string, example: 168h, description: 1 hour to 1 year }
+                    rollup_retention: { type: string, example: 2160h, description: At least raw_retention, at most 10 years }
+                metrics:
+                  type: object
+                  properties:
+                    enabled: { type: boolean }
+                    path: { type: string, example: /metrics }
+                    per_client: { type: string, enum: [all, watched, none] }
+                    token: { type: string, writeOnly: true, description: "Bearer token for Prometheus; omit to keep, empty to clear" }
+                notifications:
+                  type: object
+                  properties:
+                    quiet_hours: { type: string, example: "23:00-07:00", description: Empty for none }
+                    timezone: { type: string, example: Asia/Jerusalem }
+                openwa:
+                  type: object
+                  properties:
+                    url: { type: string }
+                    default_chat: { type: string }
+                    api_key: { type: string, writeOnly: true, description: "Omit to keep, empty to clear" }
+                access: { type: object, properties: { base_url: { type: string, description: "Public URL; https:// marks the session cookie Secure" } } }
+                logging: { type: object, properties: { level: { type: string, enum: [debug, info, warn, error] } } }
+                debug: { type: object, properties: { enabled: { type: boolean, description: Enables GET /api/v1/debug/raw } } }
+      responses: { "200": { description: The settings now in effect }, "400": { description: Invalid; nothing was saved } }
   /api/v1/channels:
     get:
       summary: Notification channels (configs are never returned)
@@ -445,7 +485,7 @@ paths:
       responses: { "200": { description: Event stream, content: { text/event-stream: {} } } }
   /api/v1/debug/raw:
     get:
-      summary: Redacted raw device reply (only with debug.enabled)
+      summary: Redacted raw device reply (404 unless the debug endpoint is on in Settings)
       parameters:
         - { name: area, in: query, required: true, schema: { type: string } }
         - { name: form, in: query, required: true, schema: { type: string } }

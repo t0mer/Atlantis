@@ -109,7 +109,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return fmt.Errorf("opening %s: %w", cfg.Store.Path, err)
 	}
 	defer st.Close()
-	box, err := openBox(ctx, cfg, st, log)
+	box, keySource, err := openBox(ctx, cfg, st, log)
 	if err != nil {
 		return err
 	}
@@ -161,7 +161,12 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer sites.Close(context.Background())
 
-	srv := api.New(api.Deps{Config: cfg, Store: st, Site: sites, Prefs: pf, Hub: hub, Notify: disp,
+	dataPath := cfg.Store.Path
+	if abs, err := filepath.Abs(dataPath); err == nil {
+		dataPath = abs
+	}
+	startup := api.Startup{Listen: cfg.Server.Listen, DataPath: dataPath, KeySource: keySource, LogFormat: cfg.Log.Format}
+	srv := api.New(api.Deps{Config: cfg, Store: st, Site: sites, Prefs: pf, Startup: startup, Hub: hub, Notify: disp,
 		Metrics: m.Handler(), Web: web.Handler(), Version: version, Log: log})
 	// Request contexts end with ctx, so live streams stop on shutdown.
 	httpSrv := &http.Server{Addr: cfg.Server.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
@@ -233,22 +238,23 @@ func seedDeco(ctx context.Context, cfg *config.Config, st *store.Store, box *sec
 // otherwise the key lives in secret.key next to the database and is
 // created on first start. It is never created for a database that already
 // holds encrypted data: that data needs the key it was sealed with.
-func openBox(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) (*secret.Box, error) {
+func openBox(ctx context.Context, cfg *config.Config, st *store.Store, log *slog.Logger) (box *secret.Box, keySource string, err error) {
 	if cfg.SecretKey != "" {
-		return secret.New(cfg.SecretKey)
+		box, err = secret.New(cfg.SecretKey)
+		return box, "environment (ATLANTIS_SECRET_KEY)", err
 	}
 	path := filepath.Join(filepath.Dir(cfg.Store.Path), secret.KeyFileName)
 	sealed, err := st.HasSealed(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	key, created, err := secret.LoadKeyFile(path, !sealed)
 	if errors.Is(err, secret.ErrNoKeyFile) {
-		return nil, fmt.Errorf("%s holds encrypted passwords, but there is no ATLANTIS_SECRET_KEY and no %s: "+
+		return nil, "", fmt.Errorf("%s holds encrypted passwords, but there is no ATLANTIS_SECRET_KEY and no %s: "+
 			"set ATLANTIS_SECRET_KEY to the key this database was used with", cfg.Store.Path, path)
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
@@ -258,5 +264,6 @@ func openBox(ctx context.Context, cfg *config.Config, st *store.Store, log *slog
 	} else {
 		log.Info("using the secret key file", "path", path)
 	}
-	return secret.New(key)
+	box, err = secret.New(key)
+	return box, path, err
 }

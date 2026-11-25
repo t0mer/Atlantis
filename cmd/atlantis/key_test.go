@@ -25,7 +25,7 @@ func TestOpenBoxUsesAKeyFileNextToTheData(t *testing.T) {
 	}
 	defer st.Close()
 
-	box, err := openBox(ctx, cfg, st, log)
+	box, _, err := openBox(ctx, cfg, st, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestOpenBoxUsesAKeyFileNextToTheData(t *testing.T) {
 	st.SaveNetwork(ctx, store.Network{Host: "h", Transport: "ssh", PasswordEnc: sealed})
 
 	// A restart reads the same key.
-	box2, err := openBox(ctx, cfg, st, log)
+	box2, _, err := openBox(ctx, cfg, st, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestOpenBoxUsesAKeyFileNextToTheData(t *testing.T) {
 
 	// Encrypted data with the key file gone: refuse, never make a new key.
 	os.Remove(filepath.Join(dir, secret.KeyFileName))
-	if _, err := openBox(ctx, cfg, st, log); err == nil || !strings.Contains(err.Error(), "ATLANTIS_SECRET_KEY") {
+	if _, _, err := openBox(ctx, cfg, st, log); err == nil || !strings.Contains(err.Error(), "ATLANTIS_SECRET_KEY") {
 		t.Fatalf("got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, secret.KeyFileName)); err == nil {
@@ -52,7 +52,7 @@ func TestOpenBoxUsesAKeyFileNextToTheData(t *testing.T) {
 
 	// The environment wins.
 	cfg.SecretKey = secret.NewKey()
-	if _, err := openBox(ctx, cfg, st, log); err != nil {
+	if _, _, err := openBox(ctx, cfg, st, log); err != nil {
 		t.Fatal(err)
 	}
 }

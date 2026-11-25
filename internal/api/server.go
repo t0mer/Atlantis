@@ -37,6 +37,7 @@ type Deps struct {
 	Hub     *poller.Hub
 	Notify  *notify.Dispatcher
 	Prefs   *prefs.Prefs // settings edited in the UI (metrics, access, debug, ...)
+	Startup Startup      // settings fixed at startup, shown read-only
 	Metrics http.Handler // the Prometheus handler; served while enabled in Prefs
 	Web     http.Handler // the embedded UI; nil for none
 	Version string
