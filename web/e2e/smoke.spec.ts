@@ -87,7 +87,7 @@ test("every page renders against the fake mesh", async ({ page }) => {
   await shot(page, "events");
 
   await page.getByRole("link", { name: "Settings" }).first().click();
-  await expect(page.getByRole("heading", { name: "Configuration" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Advanced" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Deco", exact: true })).toBeVisible();
   await shot(page, "settings");
 });
@@ -173,10 +173,31 @@ test("dark mode and phone layout", async ({ page }) => {
 test("change the refresh times", async ({ page }) => {
   await signIn(page);
   await page.goto("/settings");
-  await page.getByLabel("Check devices every").selectOption("15s");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  const refresh = page.locator("section", { has: page.getByRole("heading", { name: "Refresh" }) });
+  await refresh.getByLabel("Check devices every").selectOption("15s");
+  await refresh.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Refresh times saved")).toBeVisible();
-  await expect(page.getByText("Set here; overrides the configuration file.")).toBeVisible();
+  await expect(refresh.getByText("Set here; overrides the configuration file.")).toBeVisible();
+});
+
+test("settings are saved in the UI and kept", async ({ page }) => {
+  await signIn(page);
+  await page.goto("/settings");
+  const history = page.locator("section", { has: page.getByRole("heading", { name: "History" }) });
+  await history.getByLabel("Keep detailed samples for").selectOption({ label: "3 days" });
+  await history.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("History settings saved")).toBeVisible();
+
+  const timing = page.locator("section", { has: page.getByRole("heading", { name: "Notification timing" }) });
+  await timing.getByRole("switch", { name: /Quiet hours/ }).click();
+  await timing.getByLabel("From").fill("22:30");
+  await timing.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Notification timing saved")).toBeVisible();
+
+  await page.reload();
+  await expect(history.getByLabel("Keep detailed samples for")).toHaveValue("72");
+  await expect(timing.getByLabel("From")).toHaveValue("22:30");
+  await expect(history.getByText("Set here.")).toBeVisible();
 });
 
 test("remove the Deco and connect it again", async ({ page }) => {
