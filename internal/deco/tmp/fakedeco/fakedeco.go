@@ -30,7 +30,11 @@ type Device struct {
 	byeAfter  tmp.Opcode
 	expireOne bool
 	tokenOK   bool
+	stall     tmp.Opcode
 }
+
+// Stall makes the device never answer pulls for op.
+func (d *Device) Stall(op tmp.Opcode) { d.mu.Lock(); d.stall = op; d.mu.Unlock() }
 
 // New returns a device with default replies for the read opcodes.
 func New() *Device {
@@ -122,6 +126,9 @@ func (d *Device) handle(f tmp.Frame, out *bytes.Buffer) {
 		d.packet(out, f.Seq, tmp.Packet{Op: p.Op, Type: tmp.PacketPushAck, TransID: p.TransID,
 			BodyCRC: p.BodyCRC, Total: p.Total, Offset: uint32(len(d.pending[p.TransID]))})
 	case tmp.PacketPull:
+		if p.Op == d.stall {
+			return
+		}
 		reply, ok := d.replies[p.TransID]
 		var errByte byte
 		if !ok {

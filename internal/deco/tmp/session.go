@@ -92,15 +92,20 @@ type Session struct {
 	transID uint16
 	token   []byte
 
-	wmu    sync.Mutex // serialises frame writes (requests vs heartbeat)
-	in     chan Packet
-	errc   chan error
-	done   chan struct{}
-	closed sync.Once
-	last   time.Time
-	lastMu sync.Mutex // guards last and dead
-	dead   error      // first fatal error; the stream is unusable after it
+	wmu      sync.Mutex // serialises frame writes (requests vs heartbeat)
+	in       chan Packet
+	deadCh   chan struct{} // closed on the first fatal error
+	deadOnce sync.Once
+	closing  chan struct{} // closed when Close starts; aborts waiting requests
+	done     chan struct{} // closed when Close has finished with the stream
+	closed   sync.Once
+	last     time.Time
+	lastMu   sync.Mutex // guards last and dead
+	dead     error      // first fatal error; the stream is unusable after it
 }
+
+// ErrSessionClosed is returned by requests made after or during Close.
+var ErrSessionClosed = errors.New("tmp: session closed")
 
 // Open starts a session: TOKEN_ALLOC, then COMP_NEGOTIATE, as the app does
 // after the transport connects (manager/repo/a0.java). It returns the
@@ -109,7 +114,10 @@ func Open(ctx context.Context, conn io.ReadWriteCloser, opts Options) (*Session,
 	if opts.Timeout == 0 {
 		opts.Timeout = 30 * time.Second
 	}
-	s := &Session{conn: conn, opts: opts, in: make(chan Packet, 64), errc: make(chan error, 1), done: make(chan struct{})}
+	s := &Session{
+		conn: conn, opts: opts, in: make(chan Packet, 64),
+		deadCh: make(chan struct{}), closing: make(chan struct{}), done: make(chan struct{}),
+	}
 	go s.readLoop()
 	if opts.Heartbeat > 0 {
 		go s.heartbeatLoop()
@@ -137,7 +145,7 @@ func Open(ctx context.Context, conn io.ReadWriteCloser, opts Options) (*Session,
 func (s *Session) alloc(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, body, err := s.transact(ctx, OpTokenAlloc, nil)
+	_, body, err := s.transact(ctx, OpTokenAlloc, nil, s.closing)
 	if err != nil {
 		return fmt.Errorf("allocating session token: %w", err)
 	}
@@ -164,13 +172,18 @@ func (s *Session) Request(ctx context.Context, op Opcode, params any) (json.RawM
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, reply, err := s.transact(ctx, op, body)
+	select {
+	case <-s.closing:
+		return nil, ErrSessionClosed
+	default:
+	}
+	_, reply, err := s.transact(ctx, op, body, s.closing)
 	var ae AppV2Error
 	if errors.As(err, &ae) && ae.Code == errTokenExpired {
 		// The device dropped our token: allocate a new one and retry once.
-		if _, tok, aerr := s.transact(ctx, OpTokenAlloc, nil); aerr == nil && len(tok) > 0 {
+		if _, tok, aerr := s.transact(ctx, OpTokenAlloc, nil, s.closing); aerr == nil && len(tok) > 0 {
 			s.token = tok
-			_, reply, err = s.transact(ctx, op, body)
+			_, reply, err = s.transact(ctx, op, body, s.closing)
 		}
 	}
 	if err != nil {
@@ -191,8 +204,8 @@ func (s *Session) Request(ctx context.Context, op Opcode, params any) (json.RawM
 }
 
 // transact pushes body as op and pulls the reply (business/v2/transaction).
-// Caller holds s.mu.
-func (s *Session) transact(ctx context.Context, op Opcode, body []byte) (Packet, []byte, error) {
+// It gives up when abort is closed. Caller holds s.mu.
+func (s *Session) transact(ctx context.Context, op Opcode, body []byte, abort <-chan struct{}) (Packet, []byte, error) {
 	if !Allowed(op) {
 		return Packet{}, nil, ErrOpcodeNotAllowed{Op: op}
 	}
@@ -206,7 +219,7 @@ func (s *Session) transact(ctx context.Context, op Opcode, body []byte) (Packet,
 		if err := s.writePacket(p); err != nil {
 			return Packet{}, nil, err
 		}
-		ack, err := s.await(ctx, op, id)
+		ack, err := s.await(ctx, op, id, abort)
 		if err != nil {
 			return Packet{}, nil, err
 		}
@@ -226,7 +239,7 @@ func (s *Session) transact(ctx context.Context, op Opcode, body []byte) (Packet,
 		if err := s.writePacket(Packet{Op: op, Type: PacketPull, TransID: id, Offset: uint32(len(sofar))}); err != nil {
 			return Packet{}, nil, err
 		}
-		p, err := s.await(ctx, op, id)
+		p, err := s.await(ctx, op, id, abort)
 		if err != nil {
 			return Packet{}, nil, err
 		}
@@ -245,14 +258,15 @@ func (s *Session) transact(ctx context.Context, op Opcode, body []byte) (Packet,
 }
 
 // await returns the next reply for transaction id, failing on an err byte.
-func (s *Session) await(ctx context.Context, op Opcode, id uint16) (Packet, error) {
+func (s *Session) await(ctx context.Context, op Opcode, id uint16, abort <-chan struct{}) (Packet, error) {
 	for {
 		select {
 		case <-ctx.Done():
 			return Packet{}, fmt.Errorf("tmp: %s: %w", op, ctx.Err())
-		case err := <-s.errc:
-			s.errc <- err // keep it for later callers
-			return Packet{}, err
+		case <-abort:
+			return Packet{}, ErrSessionClosed
+		case <-s.deadCh:
+			return Packet{}, s.deadErr()
 		case p := <-s.in:
 			if p.TransID != id {
 				continue // stale reply to an abandoned transaction
@@ -308,7 +322,10 @@ func (s *Session) readLoop() {
 			return
 		}
 		switch f.Ctrl {
-		case CtrlHeartbeat:
+		case CtrlHeartbeat, CtrlAssocAccept:
+		case CtrlAssocRefuse:
+			s.fail(errors.New("tmp: device refused the session (version association)"))
+			return
 		case CtrlBye:
 			s.fail(ByeError{Reason: f.Reason})
 			return
@@ -357,22 +374,23 @@ func (s *Session) fail(err error) {
 		s.dead = err
 	}
 	s.lastMu.Unlock()
-	select {
-	case s.errc <- err:
-	default:
-	}
+	s.deadOnce.Do(func() { close(s.deadCh) })
 }
+
+// Err returns the error that ended the session, or nil while it is usable.
+func (s *Session) Err() error { return s.deadErr() }
 
 // Close frees the token, says bye and closes the transport. After a fatal
 // error (bye, broken stream) it only closes the transport.
 func (s *Session) Close() error {
 	var err error
 	s.closed.Do(func() {
+		close(s.closing) // abort a waiting request so we get s.mu promptly
 		s.mu.Lock()
 		if s.token != nil && s.deadErr() == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			// The reply is ignored, as in the app (o.java M()).
-			s.transact(ctx, OpTokenFree, s.token)
+			s.transact(ctx, OpTokenFree, s.token, nil)
 			cancel()
 			s.token = nil
 		}

@@ -37,6 +37,10 @@ const (
 	crcPlaceholder = 0x5A6B7C8D
 
 	flagCompressed = 1
+
+	// maxInflated bounds a decompressed payload (a fragment is at most
+	// 8156 bytes plus header; this leaves generous room).
+	maxInflated = 1 << 20
 )
 
 // Frame is one TMP packet. Only data frames (CtrlData) carry the 16-byte
@@ -127,10 +131,12 @@ func ReadFrame(r io.Reader) (Frame, error) {
 			return Frame{}, fmt.Errorf("tmp: compressed payload: %w", err)
 		}
 		defer zr.Close()
-		// A compressed payload expands to at most one AppV2 fragment plus header.
-		out, err := io.ReadAll(io.LimitReader(zr, 1<<20))
+		out, err := io.ReadAll(io.LimitReader(zr, maxInflated+1))
 		if err != nil {
 			return Frame{}, fmt.Errorf("tmp: compressed payload: %w", err)
+		}
+		if len(out) > maxInflated {
+			return Frame{}, fmt.Errorf("tmp: compressed payload inflates beyond %d bytes", maxInflated)
 		}
 		f.Payload = out
 	}

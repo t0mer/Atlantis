@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/t0mer/atlantis/internal/deco/tmp"
 	"github.com/t0mer/atlantis/internal/deco/tmp/fakedeco"
@@ -119,5 +120,69 @@ func TestByeIsReported(t *testing.T) {
 	var bye tmp.ByeError
 	if !errors.As(err, &bye) || !strings.Contains(err.Error(), "client limit") {
 		t.Fatalf("want client-limit bye, got %v", err)
+	}
+}
+
+func TestCloseAbortsWaitingRequest(t *testing.T) {
+	d := fakedeco.New()
+	d.Stall(tmp.OpClientListGet)
+	s := open(t, d)
+	errc := make(chan error, 1)
+	go func() { _, err := s.Request(context.Background(), tmp.OpClientListGet, nil); errc <- err }()
+	time.Sleep(50 * time.Millisecond)
+	start := time.Now()
+	s.Close()
+	if err := <-errc; !errors.Is(err, tmp.ErrSessionClosed) {
+		t.Fatalf("want ErrSessionClosed, got %v", err)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Fatal("Close waited for the stalled request")
+	}
+	if !d.Freed() {
+		t.Error("token not freed after aborting the request")
+	}
+}
+
+func TestFatalErrorIsStickyAndCloseReturns(t *testing.T) {
+	client, server := net.Pipe()
+	d := fakedeco.New()
+	go d.Serve(server)
+	s, _, err := tmp.Open(context.Background(), client, tmp.Options{Heartbeat: 30 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Close() // the stream dies under the session
+	for i := 0; i < 20; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, err := s.Request(ctx, tmp.OpDeviceListGet, nil)
+		cancel()
+		if err == nil || errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("request %d: want the stream error, got %v", i, err)
+		}
+	}
+	if s.Err() == nil {
+		t.Fatal("Err() should report the fatal error")
+	}
+	done := make(chan struct{})
+	go func() { s.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung after a fatal error")
+	}
+}
+
+func TestAssocRefuseIsFatal(t *testing.T) {
+	client, server := net.Pipe()
+	go func() {
+		buf := make([]byte, 64)
+		server.Read(buf)
+		server.Write([]byte{1, 1, tmp.CtrlAssocRefuse, 0})
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := tmp.Open(ctx, client, tmp.Options{})
+	if err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("want refusal, got %v", err)
 	}
 }

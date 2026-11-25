@@ -75,3 +75,19 @@ func TestReadFrameInflatesCompressedPayload(t *testing.T) {
 		t.Fatalf("%q %v", f.Payload, err)
 	}
 }
+
+func TestReadFrameRejectsOversizedInflation(t *testing.T) {
+	var z bytes.Buffer
+	w := zlib.NewWriter(&z)
+	w.Write(make([]byte, maxInflated+10))
+	w.Close()
+	b := make([]byte, 16)
+	copy(b, []byte{1, 1, CtrlData, 0})
+	binary.BigEndian.PutUint16(b[4:], uint16(z.Len()))
+	b[6] = flagCompressed
+	b = append(b, z.Bytes()...)
+	binary.BigEndian.PutUint32(b[12:], frameCRC(b))
+	if _, err := ReadFrame(bytes.NewReader(b)); err == nil {
+		t.Fatal("oversized inflation must be an error, not silent truncation")
+	}
+}
