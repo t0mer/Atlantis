@@ -24,30 +24,40 @@ import (
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
 	"github.com/t0mer/atlantis/internal/session"
+	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
 )
 
 // Deps are the server's collaborators.
 type Deps struct {
-	Config    *config.Config
-	Store     *store.Store
-	NetworkID int64
-	Session   *session.Manager
-	Poller    *poller.Poller
-	Hub       *poller.Hub
-	Notify    *notify.Dispatcher
-	Metrics   http.Handler // nil when metrics are off
-	Web       http.Handler // the embedded UI; nil for none
-	Version   string
-	Log       *slog.Logger
-	// AcceptHostKey forgets the pinned SSH host key / certificate so the
-	// next connection trusts the device's current one. It returns
-	// ErrRestartRequired when the transport can only re-pin on restart.
-	AcceptHostKey func(ctx context.Context) error
+	Config  *config.Config
+	Store   *store.Store
+	Site    *site.Site // the Deco connection; may have nothing running
+	Hub     *poller.Hub
+	Notify  *notify.Dispatcher
+	Metrics http.Handler // nil when metrics are off
+	Web     http.Handler // the embedded UI; nil for none
+	Version string
+	Log     *slog.Logger
 }
 
-// ErrRestartRequired means a change takes effect after a restart.
-var ErrRestartRequired = errors.New("restart Atlantis to apply this change")
+type runKey struct{}
+
+// runOf returns the Deco connection needDeco put in the request context.
+func runOf(ctx context.Context) *site.Run { return ctx.Value(runKey{}).(*site.Run) }
+
+// needDeco answers 409 when no Deco is connected, so the UI can offer to
+// add one, and otherwise passes the current connection to the handler.
+func (s *Server) needDeco(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		run := s.Site.Current()
+		if run == nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": site.ErrNoDeco.Error(), "code": "no_deco"})
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), runKey{}, run)))
+	})
+}
 
 // Server is the HTTP API.
 type Server struct {
@@ -89,6 +99,18 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/auth/logout", s.logout)
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireAuth)
+				r.Get("/settings", s.settings)
+				r.Put("/settings", notVerified)
+				r.Get("/channels", s.listChannels)
+				r.Post("/channels", s.createChannel)
+				r.Put("/channels/{id}", s.updateChannel)
+				r.Delete("/channels/{id}", s.deleteChannel)
+				r.Post("/channels/{id}/test", s.testChannel)
+				r.Post("/channels/test", s.testDraftChannel)
+				r.Get("/audit", s.auditLog)
+			})
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireAuth, s.needDeco)
 				r.Get("/ready", s.ready)
 				r.Get("/network", s.network)
 				r.Get("/nodes", s.nodes)
@@ -102,20 +124,11 @@ func (s *Server) Handler() http.Handler {
 				r.Patch("/wifi", s.patchWiFi)
 				r.Get("/firmware", s.firmware)
 				r.Get("/events", s.events)
-				r.Get("/settings", s.settings)
-				r.Put("/settings", notVerified)
-				r.Get("/channels", s.listChannels)
-				r.Post("/channels", s.createChannel)
-				r.Put("/channels/{id}", s.updateChannel)
-				r.Delete("/channels/{id}", s.deleteChannel)
-				r.Post("/channels/{id}/test", s.testChannel)
-				r.Post("/channels/test", s.testDraftChannel)
 				r.Get("/session", s.sessionStatus)
 				r.Post("/session/logout", s.releaseSession)
 				r.Post("/session/pause", s.pauseSession)
 				r.Post("/session/resume", s.resumeSession)
 				r.Post("/session/accept-host-key", s.acceptHostKey)
-				r.Get("/audit", s.auditLog)
 				if s.Config.Debug.Enabled {
 					r.Get("/debug/raw", s.debugRaw)
 				}
@@ -196,6 +209,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, deco.ErrUnsupported):
 		writeError(w, http.StatusNotImplemented, "not supported by this Deco")
+	case errors.Is(err, site.ErrNoDeco):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error(), "code": "no_deco"})
 	default:
 		s.Log.Error("request failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")

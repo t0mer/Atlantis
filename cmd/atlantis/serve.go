@@ -19,17 +19,11 @@ import (
 
 	"github.com/t0mer/atlantis/internal/api"
 	"github.com/t0mer/atlantis/internal/config"
-	"github.com/t0mer/atlantis/internal/deco"
-	"github.com/t0mer/atlantis/internal/deco/luci"
-	"github.com/t0mer/atlantis/internal/deco/tmp"
-	"github.com/t0mer/atlantis/internal/deco/tmp/sshconn"
-	"github.com/t0mer/atlantis/internal/deco/tmp/tdp"
-	"github.com/t0mer/atlantis/internal/deco/tmpclient"
 	"github.com/t0mer/atlantis/internal/metrics"
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
 	"github.com/t0mer/atlantis/internal/secret"
-	"github.com/t0mer/atlantis/internal/session"
+	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
 	"github.com/t0mer/atlantis/internal/web"
 )
@@ -93,37 +87,6 @@ func newLogger(c config.Log, w io.Writer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(w, opts))
 }
 
-// hostKeys keeps the SSH host-key pin in the store and lets the API accept a
-// new key: after Accept, the next connection trusts and stores whatever key
-// the Deco presents.
-type hostKeys struct {
-	mu        sync.Mutex
-	pin       string
-	acceptNew bool
-	save      func(string) error
-}
-
-func (h *hostKeys) current() (pin string, acceptNew bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.pin, h.acceptNew
-}
-
-func (h *hostKeys) seen(fp string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.acceptNew {
-		h.pin, h.acceptNew = fp, false
-		_ = h.save(fp)
-	}
-}
-
-func (h *hostKeys) accept() {
-	h.mu.Lock()
-	h.pin, h.acceptNew = "", true
-	h.mu.Unlock()
-}
-
 func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// Shoutrrr uses http.DefaultClient, which has no timeout; bound it so an
 	// abandoned notification send cannot hang for ever.
@@ -139,40 +102,19 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer st.Close()
 
-	sealed := ""
-	if cfg.Deco.Password != "" {
-		if sealed, err = box.Seal(cfg.Deco.Password); err != nil {
-			return err
-		}
-	}
-	netw, err := st.EnsureNetwork(ctx, store.Network{Host: cfg.Deco.Host, Transport: cfg.Deco.Transport, Email: cfg.Deco.Email,
-		PasswordEnc: sealed, HostKey: cfg.Deco.HostKey, TLSPin: cfg.Deco.TLSPin})
-	if err != nil {
-		return err
-	}
-	password, err := box.Open(netw.PasswordEnc)
-	if err != nil {
-		return err
-	}
-	if password == "" {
-		return errors.New("no Deco password: set deco.password (or ATLANTIS_DECO_PASSWORD) once; it is then kept encrypted")
-	}
-
-	keys := &hostKeys{pin: netw.HostKey, save: func(fp string) error { return st.SetHostKey(context.Background(), netw.ID, fp) }}
-	if keys.pin == "" {
-		keys.acceptNew = true // first start: trust and store the key the Deco presents (TOFU)
-	}
-	saveTLSPin := func(fp string) {
-		if netw.TLSPin == "" { // trust on first use, then keep it
-			netw.TLSPin = fp
-			if err := st.SetTLSPin(context.Background(), netw.ID, fp); err != nil {
-				log.Error("saving the TLS pin", "err", err)
+	// A Deco given in the configuration is stored as the site, as before;
+	// without one, it is added from the UI.
+	if cfg.Deco.Host != "" {
+		sealed := ""
+		if cfg.Deco.Password != "" {
+			if sealed, err = box.Seal(cfg.Deco.Password); err != nil {
+				return err
 			}
 		}
-	}
-	client, err := newDecoClient(ctx, cfg, password, keys, netw.TLSPin, saveTLSPin, log)
-	if err != nil {
-		return err
+		if _, err := st.EnsureNetwork(ctx, store.Network{Host: cfg.Deco.Host, Port: cfg.Deco.Port, Transport: cfg.Deco.Transport, Email: cfg.Deco.Email,
+			PasswordEnc: sealed, HostKey: cfg.Deco.HostKey, TLSPin: cfg.Deco.TLSPin}); err != nil {
+			return err
+		}
 	}
 
 	var m *metrics.Metrics
@@ -182,67 +124,47 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		metricsHandler = m.Handler()
 	}
 	hub := poller.NewHub()
-	var stateMu sync.Mutex
-	var lastState session.State
-	sess := session.New(client, func(s session.Status) {
-		hub.Publish(poller.Message{Kind: "session", Data: s})
-		stateMu.Lock()
-		prev := lastState
-		lastState = s.State
-		stateMu.Unlock()
-		if m != nil && s.State == session.StateConnected && prev != session.StateConnected {
-			m.Login("ok")
-		} else if m != nil && s.State == session.StateAuthFailed && prev != session.StateAuthFailed {
-			m.Login("auth_failed")
-		}
-		log.Info("deco session", "state", s.State, "error", s.Error)
-	})
-	defer sess.Close(context.Background())
 
-	var p *poller.Poller
+	var sites *site.Site
 	siteName := func() string {
-		if p != nil {
-			for _, n := range p.Snapshot().Nodes {
-				if n.Master && n.Nickname != "" {
-					return n.Nickname
-				}
+		run := sites.Current()
+		if run == nil {
+			return "Atlantis"
+		}
+		for _, n := range run.Poller.Snapshot().Nodes {
+			if n.Master && n.Nickname != "" {
+				return n.Nickname
 			}
 		}
-		return cfg.Deco.Host
+		return run.Network.Host
 	}
 	disp := notify.New(st, box, cfg, siteName, log)
-	p, err = poller.New(ctx, poller.Options{NetworkID: netw.ID, Fast: cfg.Poll.Fast, Slow: cfg.Poll.Slow, OfflineAfter: cfg.Poll.OfflineAfterMisses,
-		RawRetention: cfg.Store.RawRetention, RollupRetention: cfg.Store.RollupRetention}, sess, st, disp, m, hub, log)
-	if err != nil {
+	sites = site.New(ctx, site.Deps{Config: cfg, Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log})
+	if err := sites.LoadPoll(ctx); err != nil {
 		return err
 	}
+	if err := sites.Start(ctx); err != nil {
+		// Keep serving so the connection can be fixed from the UI.
+		log.Error("starting the Deco connection", "err", err)
+	}
+	defer sites.Close(context.Background())
 
-	srv := api.New(api.Deps{Config: cfg, Store: st, NetworkID: netw.ID, Session: sess, Poller: p, Hub: hub, Notify: disp,
-		Metrics: metricsHandler, Web: web.Handler(), Version: version, Log: log,
-		AcceptHostKey: func(context.Context) error {
-			if cfg.Deco.Transport == "luci" {
-				// The local web client pins in memory; clear the stored pin
-				// so a restart trusts the device's current certificate.
-				netw.TLSPin = ""
-				if err := st.SetTLSPin(context.Background(), netw.ID, ""); err != nil {
-					return err
-				}
-				return api.ErrRestartRequired
-			}
-			keys.accept()
-			return st.SetHostKey(context.Background(), netw.ID, "")
-		}})
+	srv := api.New(api.Deps{Config: cfg, Store: st, Site: sites, Hub: hub, Notify: disp,
+		Metrics: metricsHandler, Web: web.Handler(), Version: version, Log: log})
 	// Request contexts end with ctx, so live streams stop on shutdown.
 	httpSrv := &http.Server{Addr: cfg.Server.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
 		BaseContext: func(net.Listener) context.Context { return ctx }}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
 	go func() { defer wg.Done(); disp.Run(ctx) }()
-	go func() { defer wg.Done(); p.Run(ctx) }()
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", cfg.Server.Listen, "deco", cfg.Deco.Host, "transport", cfg.Deco.Transport, "version", version)
+		host := "none (add it in the UI)"
+		if run := sites.Current(); run != nil {
+			host = run.Network.Host
+		}
+		log.Info("listening", "addr", cfg.Server.Listen, "deco", host, "version", version)
 		errc <- httpSrv.ListenAndServe()
 	}()
 	select {
@@ -258,53 +180,4 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	_ = httpSrv.Shutdown(sctx)
 	wg.Wait()
 	return nil
-}
-
-// newDecoClient builds the transport's client: SSH (TDP discovery, TP-Link
-// ID login, host-key pinning) or the local web API.
-// The first SSH connection trusts and stores the key the Deco presents
-// (trust on first use, CLAUDE.md §5.1); later a different key stops the
-// session until it is accepted through the API. deco.host_key pins one up
-// front.
-func newDecoClient(ctx context.Context, cfg *config.Config, password string, keys *hostKeys, tlsPin string, saveTLSPin func(string), log *slog.Logger) (deco.Client, error) {
-	switch cfg.Deco.Transport {
-	case "luci":
-		base := cfg.Deco.Host
-		if !strings.Contains(base, "://") {
-			base = "http://" + base
-		}
-		return luci.New(base, password, luci.Options{Pin: tlsPin, OnFingerprint: func(fp string) {
-			log.Warn("trusting the Deco's TLS certificate on first use", "fingerprint", fp)
-			saveTLSPin(fp)
-		}})
-	}
-
-	port, digest, tps := cfg.Deco.Port, false, false
-	dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	info, err := tdp.Discover(dctx, cfg.Deco.Host)
-	cancel()
-	if err != nil {
-		log.Warn("TDP discovery failed; using defaults", "err", err)
-	} else {
-		digest, tps = info.NeedAccountDigest, info.TPSBanner()
-		if port == 0 {
-			port = info.SSHPort()
-		}
-		log.Info("deco discovered", "model", info.Model, "role", info.Role, "ssh_port", info.SSHPort())
-	}
-	if port == 0 {
-		port = 20001
-	}
-	user := sshconn.Username(cfg.Deco.Email, digest, false)
-	dial := func(ctx context.Context, _ func(string, ...any)) (io.ReadWriteCloser, error) {
-		pin, acceptNew := keys.current()
-		return sshconn.Dial(ctx, sshconn.Options{
-			Host: cfg.Deco.Host, Port: port, User: user, Password: password, TPSBanner: tps,
-			HostKeyPin: pin, AcceptNew: acceptNew, OnHostKey: func(fp string) {
-				log.Info("ssh host key", "fingerprint", fp, "trusted", acceptNew)
-				keys.seen(fp)
-			},
-		})
-	}
-	return tmpclient.New(dial, tmp.Options{Username: cfg.Deco.Email, Owner: true, Heartbeat: 3 * time.Second}), nil
 }
