@@ -833,6 +833,10 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 
 // debugRaw returns a redacted raw reply (only when debug.enabled).
 func (s *Server) debugRaw(w http.ResponseWriter, r *http.Request) {
+	if !s.Prefs.Get().Debug.Enabled {
+		writeError(w, http.StatusNotFound, "the debug endpoint is off (Settings, Advanced)")
+		return
+	}
 	area, form := r.URL.Query().Get("area"), r.URL.Query().Get("form")
 	var raw json.RawMessage
 	err := runOf(r.Context()).Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -186,16 +187,19 @@ func NewSender(kind string, c Config) (Sender, error) {
 
 // Dispatcher routes events to the enabled channels.
 type Dispatcher struct {
-	store    *store.Store
-	box      *secret.Box
+	store *store.Store
+	box   *secret.Box
+
+	mu       sync.RWMutex // guards the settings below (changed from the UI)
 	defaults config.OpenWA
 	quiet    [2]int // minutes after midnight; equal = no quiet hours
 	loc      *time.Location
-	site     func() string
-	log      *slog.Logger
-	queue    chan job
-	now      func() time.Time
-	newSend  func(kind string, c Config) (Sender, error)
+
+	site    func() string
+	log     *slog.Logger
+	queue   chan job
+	now     func() time.Time
+	newSend func(kind string, c Config) (Sender, error)
 }
 
 type job struct {
@@ -205,17 +209,27 @@ type job struct {
 
 // New returns a dispatcher; call Run to start delivering.
 func New(st *store.Store, box *secret.Box, cfg *config.Config, site func() string, log *slog.Logger) *Dispatcher {
-	d := &Dispatcher{store: st, box: box, defaults: cfg.OpenWA, site: site, log: log,
+	d := &Dispatcher{store: st, box: box, site: site, log: log,
 		queue: make(chan job, 256), now: time.Now, newSend: NewSender}
-	d.loc, _ = time.LoadLocation(cfg.Notify.Timezone)
-	if d.loc == nil {
-		d.loc = time.UTC
-	}
-	if cfg.Notify.QuietHours != "" {
-		s, e, _ := config.ParseQuietHours(cfg.Notify.QuietHours)
-		d.quiet = [2]int{s, e}
-	}
+	d.SetPrefs(cfg.Notify, cfg.OpenWA)
 	return d
+}
+
+// SetPrefs applies quiet hours, the time zone and the OpenWA defaults; the
+// next notification uses them. Values are validated by the caller.
+func (d *Dispatcher) SetPrefs(n config.Notify, openwa config.OpenWA) {
+	loc, _ := time.LoadLocation(n.Timezone)
+	if loc == nil {
+		loc = time.UTC
+	}
+	var quiet [2]int
+	if n.QuietHours != "" {
+		s, e, _ := config.ParseQuietHours(n.QuietHours)
+		quiet = [2]int{s, e}
+	}
+	d.mu.Lock()
+	d.loc, d.quiet, d.defaults = loc, quiet, openwa
+	d.mu.Unlock()
 }
 
 // Run delivers queued events until ctx is done.
@@ -244,11 +258,13 @@ func (d *Dispatcher) Notify(e store.Event, name string, watched bool) {
 }
 
 func (d *Dispatcher) inQuietHours(t time.Time) bool {
-	s, e := d.quiet[0], d.quiet[1]
+	d.mu.RLock()
+	s, e, loc := d.quiet[0], d.quiet[1], d.loc
+	d.mu.RUnlock()
 	if s == e {
 		return false
 	}
-	lt := t.In(d.loc)
+	lt := t.In(loc)
 	m := lt.Hour()*60 + lt.Minute()
 	if s < e {
 		return m >= s && m < e
@@ -289,6 +305,8 @@ func (d *Dispatcher) OpenConfig(ch store.Channel) (Config, error) {
 		return Config{}, fmt.Errorf("channel config: %w", err)
 	}
 	if ch.Kind == KindOpenWA {
+		d.mu.RLock()
+		defer d.mu.RUnlock()
 		if c.URL == "" {
 			c.URL = d.defaults.URL
 		}

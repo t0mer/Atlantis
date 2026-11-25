@@ -23,6 +23,7 @@ import (
 	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
+	"github.com/t0mer/atlantis/internal/prefs"
 	"github.com/t0mer/atlantis/internal/session"
 	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
@@ -35,7 +36,8 @@ type Deps struct {
 	Site    *site.Site // the Deco connection; may have nothing running
 	Hub     *poller.Hub
 	Notify  *notify.Dispatcher
-	Metrics http.Handler // nil when metrics are off
+	Prefs   *prefs.Prefs // settings edited in the UI (metrics, access, debug, ...)
+	Metrics http.Handler // the Prometheus handler; served while enabled in Prefs
 	Web     http.Handler // the embedded UI; nil for none
 	Version string
 	Log     *slog.Logger
@@ -62,30 +64,30 @@ func (s *Server) needDeco(next http.Handler) http.Handler {
 // Server is the HTTP API.
 type Server struct {
 	Deps
-	store         *store.Store
-	limiter       *limiter
-	secureCookies bool
-	now           func() time.Time
-	started       time.Time
+	store   *store.Store
+	limiter *limiter
+	now     func() time.Time
+	started time.Time
 }
 
 // New builds the server.
 func New(d Deps) *Server {
 	s := &Server{Deps: d, store: d.Store, now: time.Now, started: time.Now(),
-		limiter:       &limiter{hits: map[string][]time.Time{}, now: time.Now},
-		secureCookies: strings.HasPrefix(d.Config.Server.BaseURL, "https://")}
+		limiter: &limiter{hits: map[string][]time.Time{}, now: time.Now}}
 	return s
+}
+
+// secureCookies marks the session cookie Secure when Atlantis is reached
+// over HTTPS (the public URL set in Settings).
+func (s *Server) secureCookies() bool {
+	return strings.HasPrefix(s.Prefs.Get().Access.BaseURL, "https://")
 }
 
 // Handler returns the router.
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.Recoverer, securityHeaders)
+	r.Use(middleware.Recoverer, securityHeaders, s.metricsRoute)
 	r.Get("/health", s.health)
-	if s.Metrics != nil {
-		// Metrics carry client names and MACs: never public.
-		r.Handle(s.Config.Metrics.Path, s.metricsAuth(s.Metrics))
-	}
 	r.Get("/api/docs", docsPage)
 	r.Get("/api/openapi.yaml", openAPISpec)
 	r.Route("/api/v1", func(r chi.Router) {
@@ -133,9 +135,7 @@ func (s *Server) Handler() http.Handler {
 				r.Post("/session/pause", s.pauseSession)
 				r.Post("/session/resume", s.resumeSession)
 				r.Post("/session/accept-host-key", s.acceptHostKey)
-				if s.Config.Debug.Enabled {
-					r.Get("/debug/raw", s.debugRaw)
-				}
+				r.Get("/debug/raw", s.debugRaw) // answers 404 unless enabled in Settings
 			})
 		})
 	})
@@ -147,10 +147,23 @@ func (s *Server) Handler() http.Handler {
 
 // metricsAuth admits a matching bearer token (for Prometheus) when
 // metrics.token is set, and otherwise a logged-in session.
-func (s *Server) metricsAuth(next http.Handler) http.Handler {
-	tok := s.Config.Metrics.Token
+// metricsRoute serves Prometheus metrics at the path set in Settings while
+// they are enabled; the path can change at runtime, so it is matched here
+// rather than registered in the router.
+func (s *Server) metricsRoute(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if tok != "" {
+		if m := s.Prefs.Get().Metrics; s.Metrics != nil && m.Enabled && r.URL.Path == m.Path {
+			// Metrics carry client names and MACs: never public.
+			s.metricsAuth(s.Metrics).ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) metricsAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tok := s.Prefs.Get().Metrics.Token; tok != "" {
 			got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if ok && subtle.ConstantTimeCompare([]byte(got), []byte(tok)) == 1 {
 				next.ServeHTTP(w, r)

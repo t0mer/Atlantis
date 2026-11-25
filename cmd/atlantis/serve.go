@@ -23,6 +23,7 @@ import (
 	"github.com/t0mer/atlantis/internal/metrics"
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
+	"github.com/t0mer/atlantis/internal/prefs"
 	"github.com/t0mer/atlantis/internal/secret"
 	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
@@ -73,10 +74,20 @@ func secretAttr(k string) bool {
 	return false
 }
 
-func newLogger(c config.Log, w io.Writer) *slog.Logger {
+// logLevel is the process's log level; Settings can change it at runtime.
+var logLevel = new(slog.LevelVar)
+
+// setLogLevel applies a level name (debug, info, warn, error).
+func setLogLevel(name string) {
 	var lvl slog.Level
-	_ = lvl.UnmarshalText([]byte(c.Level))
-	opts := &slog.HandlerOptions{Level: lvl, ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+	if lvl.UnmarshalText([]byte(name)) == nil {
+		logLevel.Set(lvl)
+	}
+}
+
+func newLogger(c config.Log, w io.Writer) *slog.Logger {
+	setLogLevel(c.Level)
+	opts := &slog.HandlerOptions{Level: logLevel, ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 		if secretAttr(a.Key) {
 			return slog.String(a.Key, "[redacted]")
 		}
@@ -107,12 +118,14 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 
-	var m *metrics.Metrics
-	var metricsHandler http.Handler
-	if cfg.Metrics.Enabled {
-		m = metrics.New(cfg.Metrics.PerClient)
-		metricsHandler = m.Handler()
+	// Settings edited in the UI; the configuration only gives defaults.
+	pf := prefs.New(cfg, st, box)
+	if err := pf.Load(ctx); err != nil {
+		log.Error("reading saved settings", "err", err)
 	}
+	// Metrics are always collected (cheap); the API serves them only while
+	// enabled in Settings, at the path set there.
+	m := metrics.New(pf.Get().Metrics.PerClient)
 	hub := poller.NewHub()
 
 	var sites *site.Site
@@ -129,7 +142,16 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return run.Network.Host
 	}
 	disp := notify.New(st, box, cfg, siteName, log)
-	sites = site.New(ctx, site.Deps{Config: cfg, Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log})
+	pf.OnApply(func(v prefs.Values) {
+		disp.SetPrefs(v.Notify, v.OpenWA)
+		m.SetPerClient(v.Metrics.PerClient)
+		setLogLevel(v.Logging.Level)
+	})
+	retention := func() (time.Duration, time.Duration) {
+		h := pf.Get().History
+		return h.RawRetention, h.RollupRetention
+	}
+	sites = site.New(ctx, site.Deps{Config: cfg, Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log, Retention: retention})
 	if err := sites.LoadPoll(ctx); err != nil {
 		return err
 	}
@@ -139,8 +161,8 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer sites.Close(context.Background())
 
-	srv := api.New(api.Deps{Config: cfg, Store: st, Site: sites, Hub: hub, Notify: disp,
-		Metrics: metricsHandler, Web: web.Handler(), Version: version, Log: log})
+	srv := api.New(api.Deps{Config: cfg, Store: st, Site: sites, Prefs: pf, Hub: hub, Notify: disp,
+		Metrics: m.Handler(), Web: web.Handler(), Version: version, Log: log})
 	// Request contexts end with ctx, so live streams stop on shutdown.
 	httpSrv := &http.Server{Addr: cfg.Server.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
 		BaseContext: func(net.Listener) context.Context { return ctx }}

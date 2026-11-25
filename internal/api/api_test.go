@@ -25,6 +25,7 @@ import (
 	"github.com/t0mer/atlantis/internal/metrics"
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
+	"github.com/t0mer/atlantis/internal/prefs"
 	"github.com/t0mer/atlantis/internal/secret"
 	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
@@ -113,7 +114,7 @@ func newEnv(t *testing.T) *env {
 	sealed, _ := box.Seal("decopass")
 	st.SaveNetwork(ctx, store.Network{Host: "192.0.2.1", Transport: "ssh", Email: "owner@example.com", PasswordEnc: sealed})
 	cfg := &config.Config{Deco: config.Deco{Transport: "ssh"}, Poll: config.Poll{Fast: time.Minute, Slow: time.Minute, OfflineAfterMisses: 2},
-		Store: config.Store{RawRetention: time.Hour, RollupRetention: 2 * time.Hour}, Metrics: config.Metrics{Path: "/metrics", PerClient: "all"},
+		Store: config.Store{RawRetention: time.Hour, RollupRetention: 2 * time.Hour}, Metrics: config.Metrics{Enabled: true, Path: "/metrics", PerClient: "all"},
 		Notify: config.Notify{Timezone: "UTC"}, Debug: config.Debug{Enabled: true}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	f := &fakeDeco{ssid: "old"}
@@ -138,7 +139,11 @@ func newEnv(t *testing.T) *env {
 			t.Fatal("the first poll did not finish")
 		}
 	}
-	s := New(Deps{Config: cfg, Store: st, Site: sites, Hub: hub, Notify: disp, Metrics: m.Handler(), Version: "test", Log: log})
+	pf := prefs.New(cfg, st, box)
+	if err := pf.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Deps{Config: cfg, Store: st, Site: sites, Prefs: pf, Hub: hub, Notify: disp, Metrics: m.Handler(), Version: "test", Log: log})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
@@ -380,7 +385,8 @@ func TestStreamSendsSnapshot(t *testing.T) {
 
 // The spec and the router must list the same routes.
 func TestSpecMatchesRouter(t *testing.T) {
-	s := New(Deps{Config: &config.Config{Metrics: config.Metrics{Path: "/metrics"}, Debug: config.Debug{Enabled: true}}, Log: slog.Default()})
+	c := &config.Config{Metrics: config.Metrics{Path: "/metrics"}, Debug: config.Debug{Enabled: true}}
+	s := New(Deps{Config: c, Prefs: prefs.New(c, nil, nil), Log: slog.Default()})
 	var routes []string
 	chi.Walk(s.Handler().(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if strings.HasPrefix(route, "/api/v1/") || route == "/health" {
@@ -417,7 +423,8 @@ func TestMetricsNeedAuth(t *testing.T) {
 }
 
 func TestMetricsBearerToken(t *testing.T) {
-	s := New(Deps{Config: &config.Config{Metrics: config.Metrics{Path: "/metrics", Token: "scrape-me"}}, Log: slog.Default(),
+	c := &config.Config{Metrics: config.Metrics{Enabled: true, Path: "/metrics", Token: "scrape-me"}}
+	s := New(Deps{Config: c, Prefs: prefs.New(c, nil, nil), Log: slog.Default(),
 		Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })})
 	for tok, want := range map[string]int{"scrape-me": 200, "wrong": 401, "": 401} {
 		req := httptest.NewRequest("GET", "/metrics", nil)
@@ -435,11 +442,12 @@ func TestMetricsBearerToken(t *testing.T) {
 // Review finding: the stream must outlive the 60s request timeout.
 func TestStreamIsNotTimedOut(t *testing.T) {
 	var found bool
-	s := New(Deps{Config: &config.Config{Metrics: config.Metrics{Path: "/metrics"}}, Log: slog.Default()})
+	c := &config.Config{Metrics: config.Metrics{Path: "/metrics"}}
+	s := New(Deps{Config: c, Prefs: prefs.New(c, nil, nil), Log: slog.Default()})
 	chi.Walk(s.Handler().(chi.Routes), func(method, route string, h http.Handler, mws ...func(http.Handler) http.Handler) error {
 		if route == "/api/v1/stream" {
 			found = true
-			if len(mws) > 3 { // Recoverer, securityHeaders, requireAuth (via With); a timeout would be a 4th
+			if len(mws) > 4 { // Recoverer, securityHeaders, metricsRoute, requireAuth (via With); a timeout would be a 5th
 				t.Errorf("stream has %d middlewares; the timeout must not apply", len(mws))
 			}
 		}

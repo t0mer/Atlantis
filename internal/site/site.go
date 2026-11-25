@@ -80,6 +80,9 @@ type Deps struct {
 	Metrics *metrics.Metrics // nil when off
 	Log     *slog.Logger
 	Build   Builder // nil = the real transports
+	// Retention returns the current history retention (Settings); nil
+	// keeps the configuration's values.
+	Retention func() (raw, rollup time.Duration)
 }
 
 // Site owns the current Run.
@@ -165,7 +168,7 @@ func (s *Site) start(ctx context.Context, n store.Network, password string, keys
 	pl := s.Poll()
 	c := s.d.Config
 	p, err := poller.New(ctx, poller.Options{NetworkID: n.ID, Fast: pl.Fast, Slow: pl.Slow, OfflineAfter: pl.OfflineAfterMisses,
-		RawRetention: c.Store.RawRetention, RollupRetention: c.Store.RollupRetention}, sess, s.d.Store, s.d.Notify, s.d.Metrics, s.d.Hub, s.d.Log)
+		RawRetention: c.Store.RawRetention, RollupRetention: c.Store.RollupRetention, Retention: s.d.Retention}, sess, s.d.Store, s.d.Notify, s.d.Metrics, s.d.Hub, s.d.Log)
 	if err != nil {
 		return err
 	}

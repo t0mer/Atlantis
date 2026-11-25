@@ -193,8 +193,12 @@ func (p *Prefs) Load(ctx context.Context) error {
 	if load(Debug, &d) {
 		v.Debug, from[Debug] = d, true
 	}
-	if err := Validate(v); err != nil {
-		return errors.Join(append(errs, fmt.Errorf("saved settings are not valid, using the configuration: %w", err))...)
+	// The configuration's own values were checked by config.Validate; only
+	// a mix with saved sections needs checking here.
+	if len(from) > 0 {
+		if err := Validate(v); err != nil {
+			return errors.Join(append(errs, fmt.Errorf("saved settings are not valid, using the configuration: %w", err))...)
+		}
 	}
 	p.mu.Lock()
 	p.v, p.fromUI = v, from
@@ -317,7 +321,9 @@ func (p *Prefs) save(ctx context.Context, section string, v Values) error {
 // Validate checks every section.
 func Validate(v Values) error {
 	var errs []error
-	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf("%w: "+format, append([]any{ErrInvalid}, a...)...)) }
+	bad := func(format string, a ...any) {
+		errs = append(errs, fmt.Errorf("%w: "+format, append([]any{ErrInvalid}, a...)...))
+	}
 
 	h := v.History
 	if h.RawRetention < time.Hour || h.RawRetention > 365*24*time.Hour {

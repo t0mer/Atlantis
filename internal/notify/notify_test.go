@@ -190,3 +190,27 @@ func TestShoutrrrSendHonoursContext(t *testing.T) {
 		t.Fatalf("%v after %s", err, time.Since(start))
 	}
 }
+
+func TestSetPrefsAppliesAtOnce(t *testing.T) {
+	d, _, _, now := setup(t, "")
+	if d.inQuietHours(*now) {
+		t.Fatal("no quiet hours yet")
+	}
+	d.SetPrefs(config.Notify{Timezone: "Asia/Jerusalem", QuietHours: "11:00-13:00"}, config.OpenWA{URL: "http://wa.lan"})
+	if !d.inQuietHours(*now) { // 12:00 in Jerusalem
+		t.Fatal("new quiet hours must apply to the next notification")
+	}
+	c, _ := d.OpenConfig(store.Channel{Kind: KindOpenWA, ConfigEnc: mustSeal(t, d, Config{})})
+	if c.URL != "http://wa.lan" {
+		t.Fatalf("new OpenWA defaults must apply: %+v", c)
+	}
+}
+
+func mustSeal(t *testing.T, d *Dispatcher, c Config) string {
+	t.Helper()
+	s, err := d.SealConfig(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}

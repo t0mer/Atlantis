@@ -32,6 +32,10 @@ type Options struct {
 	OfflineAfter    int
 	RawRetention    time.Duration
 	RollupRetention time.Duration
+	// Retention, if set, returns the current retention for each hourly
+	// compaction (it can change in Settings); otherwise the two fields
+	// above are used.
+	Retention func() (raw, rollup time.Duration)
 }
 
 // Snapshot is the latest view of the site.
@@ -164,7 +168,11 @@ func (p *Poller) Run(ctx context.Context) {
 			resetTimer(slow, jitter(iv.Slow))
 			p.log.Info("refresh intervals changed", "fast", iv.Fast, "slow", iv.Slow, "offline_after", iv.OfflineAfter)
 		case <-compact.C:
-			if err := p.store.Compact(ctx, p.opts.RawRetention, p.opts.RollupRetention); err != nil {
+			raw, rollup := p.opts.RawRetention, p.opts.RollupRetention
+			if p.opts.Retention != nil { // current values from Settings
+				raw, rollup = p.opts.Retention()
+			}
+			if err := p.store.Compact(ctx, raw, rollup); err != nil {
 				p.log.Error("compacting history", "err", err)
 			}
 		}
