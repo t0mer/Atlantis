@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,7 +47,9 @@ A sanitised before/after record is written to --out for the tests.`,
 			}
 			o.password = os.Getenv("ATLANTIS_CLOUD_PASSWORD")
 			o.in, o.out, o.errOut = os.Stdin, os.Stdout, os.Stderr
-			ctx := cmd.Context()
+			// Ctrl-C ends the wait early; the restore still runs.
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 			c, err := sshSession(ctx, o)
 			if err != nil {
 				return err
@@ -108,25 +112,37 @@ func wifiProbe(ctx context.Context, c *tmpclient.Client, network, field string, 
 		return err
 	}
 	change.Bands, restore.Bands = bands, bands
+	// Both directions must be valid before anything is sent, or a change
+	// could be made that cannot be undone.
+	if err := tmpclient.ValidatePatch(change); err != nil {
+		return fmt.Errorf("the change is not valid: %w", err)
+	}
+	if err := tmpclient.ValidatePatch(restore); err != nil {
+		return fmt.Errorf("the original value could not be restored afterwards (%w), so nothing was changed", err)
+	}
 	rec := probeRecord{Network: network, Field: field, Before: sanitise(before)}
 
 	fmt.Fprintf(o.out, "Probing %s %s on %v: changing it now.\n", network, field, bands)
-	restored := false
-	defer func() { // always try to put it back, even after a failure
-		if !restored {
+	sent, restored := false, false
+	defer func() { // put it back after a failure or Ctrl-C, once something was sent
+		if sent && !restored {
 			if _, err := c.ProbeNetwork(context.Background(), restore); err != nil {
 				fmt.Fprintf(o.errOut, "RESTORE FAILED: %v\nFix %s %s in the Deco app.\n", err, network, field)
 			}
 		}
 	}()
+	sent = true
 	if _, err := c.ProbeNetwork(ctx, change); err != nil {
+		sent = !errors.Is(err, deco.ErrInvalid) // refused before sending
 		rec.Result = "change failed: " + err.Error()
 		_ = writeRecord(out, rec)
 		return fmt.Errorf("change: %w", err)
 	}
 	// The Deco applies Wi-Fi changes in the background; check it still
 	// shows the change once that has settled.
-	time.Sleep(probeSettle)
+	if err := sleepCtx(ctx, probeSettle); err != nil {
+		return err
+	}
 	after, err := networkObjs(ctx, c, network, bands)
 	if err != nil {
 		return err
@@ -144,7 +160,9 @@ func wifiProbe(ctx context.Context, c *tmpclient.Client, network, field string, 
 		return fmt.Errorf("restore: %w", err)
 	}
 	restored = true
-	time.Sleep(probeSettle / 2)
+	if err := sleepCtx(ctx, probeSettle/2); err != nil {
+		return err
+	}
 	final, err := networkObjs(ctx, c, network, bands)
 	if err != nil {
 		return err
@@ -246,11 +264,11 @@ func probePatches(network, field string, before map[string]deco.Obj) (change, re
 		}
 		tmpPass := "atlantis-probe-" + randHex(4)
 		curPass := b64Plain(first.Str("password"))
-		change.Encryption, change.Password = ptrTo("wpa2"), &tmpPass
-		restore.Encryption = ptrTo("none")
-		if curPass != "" {
-			restore.Password = &curPass
+		if curPass == "" {
+			return change, restore, errors.New("the open network has no stored password to put back, so the temporary one would stay; set one in the Deco app first")
 		}
+		change.Encryption, change.Password = ptrTo("wpa2"), &tmpPass
+		restore.Encryption, restore.Password = ptrTo("none"), &curPass
 	case deco.FieldHidden:
 		if !first.Has("enable_hide_ssid") {
 			return change, restore, fmt.Errorf("the Deco does not report hiding for the %s network", network)
@@ -323,3 +341,15 @@ func randHex(n int) string {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// sleepCtx waits d, or returns early when ctx ends.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

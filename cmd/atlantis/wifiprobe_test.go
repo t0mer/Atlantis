@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/t0mer/atlantis/internal/deco/tmp"
@@ -34,7 +35,7 @@ func enc(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) 
 func TestWiFiProbeChangesAndRestores(t *testing.T) {
 	probeSettle = 0
 	guest := func() map[string]any {
-		return map[string]any{"enable": false, "ssid": enc("Real Guest"), "password": enc(""), "encryption_mode": "none", "access_duration": "14400"}
+		return map[string]any{"enable": false, "ssid": enc("Real Guest"), "password": enc("kept-guest-pw"), "encryption_mode": "none", "access_duration": "14400"}
 	}
 	for _, field := range []string{"enable", "ssid", "encryption"} {
 		t.Run(field, func(t *testing.T) {
@@ -82,5 +83,22 @@ func TestWiFiProbeRefusesRiskyChanges(t *testing.T) {
 	}
 	if d.Request(tmp.OpWirelessSet) != nil {
 		t.Fatal("a refused probe sent a write")
+	}
+}
+
+// A probe whose undo would be invalid (here a 64-character hex PSK, longer
+// than a passphrase) changes nothing.
+func TestWiFiProbeChecksTheRestoreFirst(t *testing.T) {
+	probeSettle = 0
+	psk := strings.Repeat("ab", 32)
+	g := map[string]any{"enable": true, "ssid": enc("g"), "password": enc(psk), "encryption_mode": "wpa2"}
+	c, d := probeClient(t, map[string]any{"band2_4": map[string]any{"guest": g}})
+	var out bytes.Buffer
+	err := wifiProbe(context.Background(), c, "guest", "password", nil, t.TempDir(), sshProbeOptions{out: &out, errOut: &out})
+	if err == nil || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("got %v", err)
+	}
+	if d.Request(tmp.OpWirelessSet) != nil {
+		t.Fatal("a change that could not be undone was sent")
 	}
 }
