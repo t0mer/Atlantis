@@ -69,6 +69,10 @@ const (
 	connectAttempts = 3
 )
 
+// joinWait is how long one connection is polled for the device to join.
+// A variable so tests can shorten it.
+var joinWait = 15 * time.Second
+
 // connectBackoff is the pause before the second connect attempt (doubled
 // for the third). A variable so tests can shorten it.
 var connectBackoff = 2 * time.Second
@@ -151,9 +155,25 @@ func dialOnce(ctx context.Context, relay Relay, serverURL, deviceID string, logf
 		return nil, fmt.Errorf("ata: connect: %w", err)
 	}
 	logf("relay CONNECT attempt %d: err_code %d", attempt, r.ErrCode)
-	time.Sleep(minPoll) // the app's first transfer is at least one poll interval later
-	c.sn = 1
-	r, err = c.send(ctx, map[string]any{"method": "TRANSFER", "sn": c.sn, "raw_data": ""})
+	// The device may take a moment to join the tunnel after CONNECT: keep
+	// polling this connection before giving up on it.
+	wait := minPoll // the app's first transfer is at least one poll interval later
+	deadline := time.Now().Add(joinWait)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+		c.sn++
+		r, err = c.send(ctx, map[string]any{"method": "TRANSFER", "sn": c.sn, "raw_data": ""})
+		var re RelayError
+		if !errors.As(err, &re) || re.Code != codeNotConnected || time.Now().After(deadline) {
+			break
+		}
+		logf("relay TRANSFER sn=%d attempt %d: device not joined yet", c.sn, attempt)
+		wait = min(wait*2, 2*time.Second)
+	}
 	if err != nil {
 		logf("relay first TRANSFER attempt %d: %v", attempt, err)
 		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -161,7 +181,7 @@ func dialOnce(ctx context.Context, relay Relay, serverURL, deviceID string, logf
 		cancel()
 		return nil, fmt.Errorf("ata: %w", err)
 	}
-	logf("relay first TRANSFER attempt %d: err_code %d", attempt, r.ErrCode)
+	logf("relay TRANSFER sn=%d attempt %d: err_code %d (device joined)", c.sn, attempt, r.ErrCode)
 	if data, err := base64.StdEncoding.DecodeString(r.RawData); err == nil && len(data) > 0 {
 		c.in = append(c.in, data...)
 	}

@@ -16,15 +16,16 @@ import (
 // echoRelay is a relay whose device echoes every received byte, uppercased,
 // on the next TRANSFER response.
 type echoRelay struct {
-	mu        sync.Mutex
-	methods   []string
-	lastSN    int64
-	pending   []byte
-	tokens    []string
-	errCode   int
-	badSN     bool
-	connected bool
-	notJoined int // answer the first TRANSFER after this many CONNECTs with err_code 4
+	mu             sync.Mutex
+	methods        []string
+	lastSN         int64
+	pending        []byte
+	tokens         []string
+	errCode        int
+	badSN          bool
+	connected      bool
+	notJoined      int // answer the first TRANSFER after this many CONNECTs with err_code 4
+	notJoinedPolls int // answer this many TRANSFERs with err_code 4, keeping the connection
 }
 
 func (r *echoRelay) Token() string { return "acct" }
@@ -48,6 +49,12 @@ func (r *echoRelay) Passthrough(_ context.Context, url, dev string, req any) (js
 		r.connected = true
 		r.lastSN = 0
 	case "TRANSFER":
+		if r.notJoinedPolls > 0 {
+			r.notJoinedPolls--
+			r.lastSN = m["sn"].(int64)
+			b, _ := json.Marshal(map[string]any{"err_code": 4})
+			return b, nil
+		}
 		if r.notJoined > 0 {
 			r.notJoined--
 			r.connected = false
@@ -182,7 +189,7 @@ func TestCloseFlushesQueuedBytes(t *testing.T) {
 }
 
 func TestDialRetriesWhenDeviceNotJoined(t *testing.T) {
-	connectBackoff = time.Millisecond
+	connectBackoff, joinWait = time.Millisecond, 0
 	r := &echoRelay{notJoined: 2}
 	c := dial(t, r)
 	defer c.Close()
@@ -205,11 +212,30 @@ func TestDialRetriesWhenDeviceNotJoined(t *testing.T) {
 }
 
 func TestDialGivesUpAfterAttempts(t *testing.T) {
-	connectBackoff = time.Millisecond
+	connectBackoff, joinWait = time.Millisecond, 0
 	r := &echoRelay{notJoined: 99}
 	_, err := Dial(context.Background(), r, "https://relay.example", "dev-1", t.Logf)
 	var re RelayError
 	if !errors.As(err, &re) || re.Code != 4 || !strings.Contains(err.Error(), "3 attempts") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// The device joins after a few polls on the same connection: no reconnect.
+func TestDialWaitsForDeviceToJoin(t *testing.T) {
+	connectBackoff, joinWait = time.Millisecond, 5*time.Second
+	r := &echoRelay{notJoinedPolls: 3}
+	c := dial(t, r)
+	defer c.Close()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, m := range r.methods {
+		if m == "CONNECT" {
+			n++
+		}
+	}
+	if n != 1 || r.badSN {
+		t.Fatalf("want one CONNECT and ordered sn, got %d (%v)", n, r.methods)
 	}
 }
