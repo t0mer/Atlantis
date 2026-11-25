@@ -27,13 +27,14 @@ jobs:
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
           EVENT_NAME: ${{ github.event_name }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           NEEDS_TAG=true
           if [ -n "$INPUT_VERSION" ]; then
             VERSION="$INPUT_VERSION"
           elif [ "$EVENT_NAME" = "workflow_run" ]; then
-            VERSION="$(git tag --list '[0-9]*.*.*' | sort -V | tail -1)" # the Release just tagged it
+            VERSION="$(git tag --points-at "$RELEASE_SHA" | grep -E '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$' | sort -V | tail -1 || true)" # the Release's tag
             NEEDS_TAG=false
           else
             VERSION="$(./scripts/next-version.sh)"

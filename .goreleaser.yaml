@@ -38,6 +38,7 @@ changelog:
   use: github-native
 
 release:
+  target_commitish: "{{ .Commit }}" # creates the tag on GitHub with the release
   github:
     owner: t0mer
     name: Atlantis
