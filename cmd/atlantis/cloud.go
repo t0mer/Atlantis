@@ -132,6 +132,11 @@ func runCloudProbe(ctx context.Context, o cloudProbeOptions) error {
 	if err != nil {
 		return err
 	}
+	if o.debug {
+		for _, st := range sites {
+			fmt.Fprintf(o.errOut, "debug: site %s: accessPlatform=%q operation_mode=%q\n", st.Name, st.AccessPlatform, st.OperationMode)
+		}
+	}
 	if o.site == "" {
 		printSites(o.out, sites)
 		return nil

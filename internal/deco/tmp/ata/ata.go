@@ -69,10 +69,6 @@ const (
 	connectAttempts = 3
 )
 
-// joinWait is how long one connection is polled for the device to join.
-// A variable so tests can shorten it.
-var joinWait = 15 * time.Second
-
 // connectBackoff is the pause before the second connect attempt (doubled
 // for the third). A variable so tests can shorten it.
 var connectBackoff = 2 * time.Second
@@ -94,6 +90,7 @@ type Conn struct {
 	err     error     // terminal error
 	closed  bool
 	drain   bool // Close is flushing queued bytes before DISCONNECT
+	joined  bool // a TRANSFER has succeeded; only the loop goroutine uses it
 	sn      int64
 	kick    chan struct{}
 	done    chan struct{}
@@ -106,86 +103,45 @@ type response struct {
 	RawData string `json:"raw_data"`
 }
 
-// Dial opens a TMP channel to the device and starts the transfer loop.
-// After CONNECT it sends one empty TRANSFER to check that the device has
-// joined; if the relay answers "device not connected" it reconnects with a
-// new token, up to connectAttempts times. logf, if non-nil, receives relay
-// status lines (codes only, never tokens or data).
+// Dial sends CONNECT and starts the transfer loop. As in the app, the
+// first TRANSFER carries the first TMP bytes written (the session's
+// TOKEN_ALLOC); no empty poll goes out before that. If the relay answers it
+// with "device not connected", the connection is rebuilt with a new token
+// and the same bytes are resent, up to connectAttempts times. logf, if
+// non-nil, receives relay status lines (codes only, never tokens or data).
 func Dial(ctx context.Context, relay Relay, serverURL, deviceID string, logf func(string, ...any)) (*Conn, error) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	var last error
-	for attempt := 1; attempt <= connectAttempts; attempt++ {
-		if attempt > 1 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(connectBackoff * time.Duration(attempt-1)):
-			}
-		}
-		c, err := dialOnce(ctx, relay, serverURL, deviceID, logf, attempt)
-		if err == nil {
-			go c.loop()
-			return c, nil
-		}
-		last = err
-		var re RelayError
-		if !errors.As(err, &re) || re.Code != codeNotConnected {
-			return nil, err
-		}
-	}
-	return nil, fmt.Errorf("%w (after %d attempts; is the Deco online and reachable by the app?)", last, connectAttempts)
-}
-
-func dialOnce(ctx context.Context, relay Relay, serverURL, deviceID string, logf func(string, ...any), attempt int) (*Conn, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(16))
-	if err != nil {
-		return nil, err
-	}
 	c := &Conn{
 		relay: relay, serverURL: serverURL, deviceID: deviceID, logf: logf,
-		token: fmt.Sprintf("%s-%d", relay.Token(), n.Int64()),
-		kick:  make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}),
+		kick: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}),
 	}
 	c.cond = sync.NewCond(&c.mu)
+	if err := c.connect(ctx, 1); err != nil {
+		return nil, err
+	}
+	go c.loop()
+	return c, nil
+}
+
+// connect picks a new token suffix and sends CONNECT. sn restarts at 1.
+func (c *Conn) connect(ctx context.Context, attempt int) error {
+	n, err := rand.Int(rand.Reader, big.NewInt(16))
+	if err != nil {
+		return err
+	}
+	c.token = fmt.Sprintf("%s-%d", c.relay.Token(), n.Int64())
 	r, err := c.send(ctx, map[string]any{"method": "CONNECT", "type": "TMP"})
 	if err != nil {
-		logf("relay CONNECT attempt %d: %v", attempt, err)
-		return nil, fmt.Errorf("ata: connect: %w", err)
+		c.logf("relay CONNECT attempt %d: %v", attempt, err)
+		return fmt.Errorf("ata: connect: %w", err)
 	}
-	logf("relay CONNECT attempt %d: err_code %d", attempt, r.ErrCode)
-	// The device may take a moment to join the tunnel after CONNECT: keep
-	// polling this connection before giving up on it.
-	wait := minPoll // the app's first transfer is at least one poll interval later
-	deadline := time.Now().Add(joinWait)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(wait):
-		}
-		c.sn++
-		r, err = c.send(ctx, map[string]any{"method": "TRANSFER", "sn": c.sn, "raw_data": ""})
-		var re RelayError
-		if !errors.As(err, &re) || re.Code != codeNotConnected || time.Now().After(deadline) {
-			break
-		}
-		logf("relay TRANSFER sn=%d attempt %d: device not joined yet", c.sn, attempt)
-		wait = min(wait*2, 2*time.Second)
-	}
-	if err != nil {
-		logf("relay first TRANSFER attempt %d: %v", attempt, err)
-		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		c.send(dctx, map[string]any{"method": "DISCONNECT"}) // free the token suffix
-		cancel()
-		return nil, fmt.Errorf("ata: %w", err)
-	}
-	logf("relay TRANSFER sn=%d attempt %d: err_code %d (device joined)", c.sn, attempt, r.ErrCode)
-	if data, err := base64.StdEncoding.DecodeString(r.RawData); err == nil && len(data) > 0 {
-		c.in = append(c.in, data...)
-	}
-	return c, nil
+	c.logf("relay CONNECT attempt %d: err_code %d", attempt, r.ErrCode)
+	c.mu.Lock()
+	c.sn = 0
+	c.mu.Unlock()
+	return nil
 }
 
 func (c *Conn) send(ctx context.Context, req map[string]any) (*response, error) {
@@ -317,6 +273,16 @@ func (c *Conn) loop() {
 			return
 		}
 		ready, wait := c.due()
+		if !ready && !c.joined && wait < 0 {
+			// Before the first data exchange the app sends nothing: wait
+			// for the session's first write.
+			select {
+			case <-c.done:
+				return
+			case <-c.kick:
+				continue
+			}
+		}
 		if !ready {
 			d := jitter(poll)
 			if wait >= 0 && wait < d {
@@ -350,13 +316,41 @@ func (c *Conn) loop() {
 			case <-ctx.Done():
 			}
 		}()
-		r, err := c.send(ctx, map[string]any{
-			"method": "TRANSFER", "sn": sn, "raw_data": base64.StdEncoding.EncodeToString(batch),
-		})
+		raw := base64.StdEncoding.EncodeToString(batch)
+		r, err := c.send(ctx, map[string]any{"method": "TRANSFER", "sn": sn, "raw_data": raw})
+		for attempt := 2; err != nil && !c.joined && attempt <= connectAttempts; attempt++ {
+			var re RelayError
+			if !errors.As(err, &re) || re.Code != codeNotConnected {
+				break
+			}
+			c.logf("relay TRANSFER sn=%d (%d bytes): device not connected; reconnecting", sn, len(batch))
+			select {
+			case <-ctx.Done():
+			case <-time.After(connectBackoff * time.Duration(attempt-1)):
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			if err = c.connect(ctx, attempt); err != nil {
+				break
+			}
+			c.mu.Lock()
+			c.sn++
+			sn = c.sn
+			c.mu.Unlock()
+			r, err = c.send(ctx, map[string]any{"method": "TRANSFER", "sn": sn, "raw_data": raw})
+		}
 		cancel()
 		if err != nil {
+			if !c.joined {
+				err = fmt.Errorf("%w (after %d attempts; is the Deco online and reachable by the app?)", err, connectAttempts)
+			}
 			c.fail(err)
 			return
+		}
+		if !c.joined {
+			c.joined = true
+			c.logf("relay TRANSFER sn=%d: err_code %d (device answered)", sn, r.ErrCode)
 		}
 		data, err := base64.StdEncoding.DecodeString(r.RawData)
 		if err != nil {

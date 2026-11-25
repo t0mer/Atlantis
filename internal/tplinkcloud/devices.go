@@ -29,6 +29,9 @@ type Site struct {
 	Online         bool
 	Owner          bool // the account owns the site (vs. shared with it)
 	OperationMode  string
+	// AccessPlatform is the cloud platform the master is on. The app's ATA
+	// relay is only used for UNKNOWN/BASIC (mesh/context/c.java F9()).
+	AccessPlatform string
 	Nodes          []Node
 }
 
@@ -53,6 +56,7 @@ type cloudDevice struct {
 	AppServerURLV2 string `json:"appServerUrlV2"`
 	Role           int    `json:"role"`
 	Status         int    `json:"status"`
+	AccessPlatform string `json:"accessPlatform"`
 }
 
 func (d cloudDevice) serverURL() string {
@@ -181,6 +185,7 @@ func buildSites(devs []cloudDevice, feats map[string]feature) []Site {
 			Online:         d.Status == 1,
 			Owner:          d.Role == 0,
 			OperationMode:  f.TMPData.OperationMode,
+			AccessPlatform: d.AccessPlatform,
 			Nodes: []Node{{
 				DeviceID: d.DeviceID, MAC: normalizeMAC(d.DeviceMAC), Model: d.DeviceModel,
 				Name: firstNonEmpty(decodeB64(d.Alias), decodeB64(d.DeviceName)), Master: true,
