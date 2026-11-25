@@ -7,11 +7,15 @@ const tick = { fill: "var(--drift)", fontSize: 12 };
 const fmtTime = (ms: number, long: boolean) =>
   new Date(ms).toLocaleString([], long ? { month: "short", day: "numeric" } : { hour: "2-digit", minute: "2-digit" });
 
+/** A chart needs at least 10 minutes of samples, or every tick shows the same time. */
+const enough = (d: { t: number }[]) => d.length >= 2 && d[d.length - 1]!.t - d[0]!.t >= 10 * 60_000;
+const notEnough = <Empty>Not enough history yet for a chart. Check back in a few minutes.</Empty>;
+
 /** Download (filled) and upload (line) over time. */
 export function ThroughputChart({ points, long }: { points: Point[]; long: boolean }) {
   // Zero rates are omitted from the JSON, so a missing field means 0.
   const data = points.map((p) => ({ t: Date.parse(p.ts), down: p.down_bps ?? 0, up: p.up_bps ?? 0 }));
-  if (data.length < 2) return <Empty>Not enough samples yet for a chart.</Empty>;
+  if (!enough(data)) return notEnough;
   return (
     <div className="h-56" role="img" aria-label="Throughput over time">
       <ResponsiveContainer>
@@ -35,7 +39,7 @@ export function ThroughputChart({ points, long }: { points: Point[]; long: boole
 /** Clients attached to a node over time, with CPU/memory when the model reports them. */
 export function NodeChart({ points, long }: { points: Point[]; long: boolean }) {
   const data = points.map((p) => ({ t: Date.parse(p.ts), clients: p.clients ?? 0 }));
-  if (data.length < 2) return <Empty>Not enough samples yet for a chart.</Empty>;
+  if (!enough(data)) return notEnough;
   return (
     <div className="h-48" role="img" aria-label="Clients over time">
       <ResponsiveContainer>
