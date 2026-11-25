@@ -318,7 +318,9 @@ func (s *Server) patchClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	renamed := false
-	if body.Alias != nil && *body.Alias != "" && *body.Alias != cur.Alias && *body.Alias != cur.Name && !body.LocalOnly && s.canRename(r) {
+	// What the Deco currently calls it decides, not the stored alias: a name
+	// kept in Atlantis only, or one changed in the Deco app, is sent again.
+	if body.Alias != nil && *body.Alias != "" && *body.Alias != cur.Name && !body.LocalOnly && s.canRename(r) {
 		err := run.Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {
 			return c.(deco.ClientRenamer).RenameClient(ctx, mac, *body.Alias)
 		})
@@ -332,6 +334,9 @@ func (s *Server) patchClient(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, deco.ErrInvalid):
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
+		case errors.Is(err, deco.ErrNotApplied):
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
 		case errors.Is(err, deco.ErrNotVerified), errors.Is(err, deco.ErrUnsupported), errors.Is(err, session.ErrClosed),
 			errors.Is(err, session.ErrPaused), errors.Is(err, session.ErrBlocked), errors.Is(err, session.ErrStopped):
 			s.fail(w, err)
@@ -341,7 +346,8 @@ func (s *Server) patchClient(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c, err := s.store.UpdateClientMeta(r.Context(), run.Network.ID, mac, store.ClientMeta{Alias: body.Alias, Watch: body.Watch, Tags: body.Tags})
+	// After a rename on the Deco, save it even if the browser has gone.
+	c, err := s.store.UpdateClientMeta(context.WithoutCancel(r.Context()), run.Network.ID, mac, store.ClientMeta{Alias: body.Alias, Watch: body.Watch, Tags: body.Tags})
 	s.audit(r.Context(), userFrom(r.Context()), "client.update", mac, err)
 	if err != nil {
 		s.fail(w, err)
