@@ -23,12 +23,9 @@ for _ in $(seq 100); do # the fake listens once any seeding is done
   sleep 0.1
 done
 
-# No Deco is configured: the tests add the pretend one from the UI.
-ATLANTIS_SECRET_KEY="$(bin/atlantis keygen)" \
-ATLANTIS_SERVER_LISTEN="127.0.0.1:$API_PORT" \
-ATLANTIS_STORE_PATH="$DIR/atlantis.db" \
-ATLANTIS_POLL_FAST=10s ATLANTIS_LOG_FORMAT=text \
-  bin/atlantis serve >"$DIR/serve.log" 2>&1 &
+# Nothing is configured: the key file is created next to the database and
+# the tests add the pretend Deco from the UI.
+bin/atlantis serve --server-listen "127.0.0.1:$API_PORT" --store-path "$DIR/atlantis.db" >"$DIR/serve.log" 2>&1 &
 pids+=($!)
 
 up=

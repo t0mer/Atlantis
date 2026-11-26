@@ -177,7 +177,8 @@ test("change the refresh times", async ({ page }) => {
   await refresh.getByLabel("Check devices every").selectOption("15s");
   await refresh.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Refresh times saved")).toBeVisible();
-  await expect(refresh.getByText("Set here; overrides the configuration file.")).toBeVisible();
+  await page.reload();
+  await expect(refresh.getByLabel("Check devices every")).toHaveValue("15s");
 });
 
 test("settings are saved in the UI and kept", async ({ page }) => {
@@ -194,10 +195,16 @@ test("settings are saved in the UI and kept", async ({ page }) => {
   await timing.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Notification timing saved")).toBeVisible();
 
+  const advanced = page.locator("section", { has: page.getByRole("heading", { name: "Advanced" }) });
+  await advanced.getByLabel("Log format").selectOption("text");
+  await advanced.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Advanced settings saved")).toBeVisible();
+
   await page.reload();
   await expect(history.getByLabel("Keep detailed samples for")).toHaveValue("72");
   await expect(timing.getByLabel("From")).toHaveValue("22:30");
-  await expect(history.getByText("Set here.")).toBeVisible();
+  await expect(advanced.getByLabel("Log format")).toHaveValue("text");
+  await expect(page.getByRole("heading", { name: /OpenWA/ })).toHaveCount(0);
 });
 
 test("remove the Deco and connect it again", async ({ page }) => {
