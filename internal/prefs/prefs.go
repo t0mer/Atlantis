@@ -23,35 +23,38 @@ var ErrInvalid = errors.New("invalid setting")
 
 // Section names, also the settings keys in the database.
 const (
-	History = "history"
-	Metrics = "metrics"
-	Notify  = "notifications"
-	Access  = "access"
-	Logging = "logging"
-	Debug   = "debug"
+	History  = "history"
+	Metrics  = "metrics"
+	Notify   = "notifications"
+	Access   = "access"
+	Logging  = "logging"
+	Debug    = "debug"
+	Security = "security"
 )
 
 // Sections lists every section, in display order.
-var Sections = []string{History, Metrics, Notify, Access, Logging, Debug}
+var Sections = []string{History, Metrics, Notify, Access, Logging, Debug, Security}
 
 // Values are the settings in effect. The secret (Metrics.Token) is plain
 // here; it is sealed in the database and never sent to the UI.
 type Values struct {
-	History HistoryPrefs
-	Metrics MetricsPrefs
-	Notify  NotifyPrefs
-	Access  AccessPrefs
-	Logging LoggingPrefs
-	Debug   DebugPrefs
+	History  HistoryPrefs
+	Metrics  MetricsPrefs
+	Notify   NotifyPrefs
+	Access   AccessPrefs
+	Logging  LoggingPrefs
+	Debug    DebugPrefs
+	Security SecurityPrefs
 }
 
 // Defaults are the values used until a section is saved.
 func Defaults() Values {
 	return Values{
-		History: HistoryPrefs{RawRetention: 7 * 24 * time.Hour, RollupRetention: 90 * 24 * time.Hour},
-		Metrics: MetricsPrefs{Enabled: true, Path: "/metrics", PerClient: "watched"},
-		Notify:  NotifyPrefs{Timezone: "UTC"},
-		Logging: LoggingPrefs{Level: "info", Format: "json"},
+		History:  HistoryPrefs{RawRetention: 7 * 24 * time.Hour, RollupRetention: 90 * 24 * time.Hour},
+		Metrics:  MetricsPrefs{Enabled: true, Path: "/metrics", PerClient: "watched"},
+		Notify:   NotifyPrefs{Timezone: "UTC"},
+		Logging:  LoggingPrefs{Level: "info", Format: "json"},
+		Security: SecurityPrefs{TrustNewHostKey: true},
 	}
 }
 
@@ -93,15 +96,24 @@ type DebugPrefs struct {
 	Enabled bool `json:"enabled"`
 }
 
+// SecurityPrefs is how the Deco's identity is checked.
+type SecurityPrefs struct {
+	// TrustNewHostKey trusts a changed Deco SSH host key (as after a
+	// firmware update) and records it as an event, instead of stopping
+	// until the change is accepted by hand.
+	TrustNewHostKey bool `json:"trust_new_host_key"`
+}
+
 // Patch changes some sections. Nil sections stay as they are. For the
 // secrets, a nil pointer keeps the saved value and "" clears it.
 type Patch struct {
-	History *HistoryPrefs
-	Metrics *MetricsPatch
-	Notify  *NotifyPrefs
-	Access  *AccessPrefs
-	Logging *LoggingPrefs
-	Debug   *DebugPrefs
+	History  *HistoryPrefs
+	Metrics  *MetricsPatch
+	Notify   *NotifyPrefs
+	Access   *AccessPrefs
+	Logging  *LoggingPrefs
+	Debug    *DebugPrefs
+	Security *SecurityPrefs
 }
 
 // MetricsPatch is MetricsPrefs with a keep-or-replace token.
@@ -188,6 +200,10 @@ func (p *Prefs) Load(ctx context.Context) error {
 	if load(Debug, &d) {
 		v.Debug, from[Debug] = d, true
 	}
+	var sec SecurityPrefs
+	if load(Security, &sec) {
+		v.Security, from[Security] = sec, true
+	}
 	// A saved section that no longer validates falls back to its default on
 	// its own; the other sections are kept.
 	def := Defaults()
@@ -253,6 +269,10 @@ func (p *Prefs) apply(pt Patch) (Values, []string, error) {
 		v.Debug = *pt.Debug
 		changed = append(changed, Debug)
 	}
+	if pt.Security != nil {
+		v.Security = *pt.Security
+		changed = append(changed, Security)
+	}
 	if len(changed) == 0 {
 		return v, nil, fmt.Errorf("%w: nothing to change", ErrInvalid)
 	}
@@ -276,7 +296,7 @@ func (pt Patch) Sections() []string {
 		name string
 		set  bool
 	}{{History, pt.History != nil}, {Metrics, pt.Metrics != nil}, {Notify, pt.Notify != nil},
-		{Access, pt.Access != nil}, {Logging, pt.Logging != nil}, {Debug, pt.Debug != nil}} {
+		{Access, pt.Access != nil}, {Logging, pt.Logging != nil}, {Debug, pt.Debug != nil}, {Security, pt.Security != nil}} {
 		if s.set {
 			out = append(out, s.name)
 		}
@@ -334,6 +354,8 @@ func (p *Prefs) stored(section string, v Values) (any, error) {
 		val = v.Logging
 	case Debug:
 		val = v.Debug
+	case Security:
+		val = v.Security
 	}
 	return val, nil
 }
@@ -353,6 +375,8 @@ func setSection(v *Values, src Values, section string) {
 		v.Logging = src.Logging
 	case Debug:
 		v.Debug = src.Debug
+	case Security:
+		v.Security = src.Security
 	}
 }
 

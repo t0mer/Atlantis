@@ -174,3 +174,18 @@ func TestLoggingFieldsKeepTheirValue(t *testing.T) {
 		t.Fatalf("%+v", l)
 	}
 }
+
+func TestTrustNewHostKeyIsOnUntilTurnedOff(t *testing.T) {
+	p, st, box := newPrefs(t)
+	ctx := context.Background()
+	if !p.Get().Security.TrustNewHostKey {
+		t.Fatal("on by default")
+	}
+	if _, err := p.Update(ctx, Patch{Security: &SecurityPrefs{TrustNewHostKey: false}}); err != nil {
+		t.Fatal(err)
+	}
+	p2 := New(st, box)
+	if err := p2.Load(ctx); err != nil || p2.Get().Security.TrustNewHostKey {
+		t.Fatalf("turning it off survives a restart: %v %+v", err, p2.Get().Security)
+	}
+}
