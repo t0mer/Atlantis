@@ -126,7 +126,7 @@ func LoadKeyFile(path string, create bool) (key string, created bool, err error)
 		return "", false, err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() { _ = os.Remove(tmp) }() // best effort: gone once linked
 	if err := f.Chmod(0o600); err != nil {
 		f.Close()
 		return "", false, err
@@ -176,7 +176,7 @@ func writeExclusive(path, key string) error {
 		err = cerr
 	}
 	if err != nil {
-		os.Remove(path)
+		_ = os.Remove(path) // best effort: never leave a half-written key
 	}
 	return err
 }
