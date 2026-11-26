@@ -23,7 +23,7 @@ const (
 	sessionTTL     = 7 * 24 * time.Hour
 	maxFailures    = 5
 	failureWindow  = 15 * time.Minute
-	minPasswordLen = 10
+	minPasswordLen = 6
 )
 
 type ctxKey int
@@ -113,7 +113,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	}
 	c.Username = strings.TrimSpace(c.Username)
 	if c.Username == "" || len(c.Password) < minPasswordLen {
-		writeError(w, http.StatusBadRequest, "username required and password of at least 10 characters")
+		writeError(w, http.StatusBadRequest, "username required and password of at least 6 characters")
 		return
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(c.Password), bcrypt.DefaultCost)
