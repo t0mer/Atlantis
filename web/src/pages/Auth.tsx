@@ -42,13 +42,13 @@ export function Auth({ setup }: { setup: boolean }) {
         <Field label="Username">
           <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" required />
         </Field>
-        <Field label="Password" hint={setup ? "At least 10 characters." : undefined}>
+        <Field label="Password" hint={setup ? "At least 6 characters." : undefined}>
           <Input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete={setup ? "new-password" : "current-password"}
-            minLength={setup ? 10 : undefined}
+            minLength={setup ? 6 : undefined}
             required
           />
         </Field>
