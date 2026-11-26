@@ -225,6 +225,12 @@ func (s *Store) SetSetting(ctx context.Context, key string, v any) error {
 	return err
 }
 
+// DeleteSetting removes a setting; a missing one is not an error.
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE key=?`, key)
+	return err
+}
+
 // SetSettings saves several settings in one transaction: all or none.
 func (s *Store) SetSettings(ctx context.Context, values map[string]any) error {
 	tx, err := s.db.BeginTx(ctx, nil)

@@ -540,6 +540,18 @@ func (s *Server) buildChannel(b channelBody, cur store.Channel) (store.Channel, 
 	if c.ConfigEnc == "" {
 		return c, errors.New("config is required")
 	}
+	// A new or changed config must be able to send: an OpenWA channel
+	// needs its own address and chat (there are no defaults to fall back
+	// on). Toggling or renaming a channel leaves its config alone.
+	if b.Config != nil || c.Kind != cur.Kind {
+		cfg, err := s.Notify.OpenConfig(c)
+		if err != nil {
+			return c, err
+		}
+		if _, err := notify.NewSender(c.Kind, cfg); err != nil {
+			return c, err
+		}
+	}
 	return c, nil
 }
 
