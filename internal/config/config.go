@@ -1,238 +1,111 @@
-// Package config loads Atlantis settings. Precedence: command-line flags,
-// then ATLANTIS_* environment variables, then the YAML file, then defaults.
-// One instance manages one Deco site over the LAN.
+// Package config reads the few settings Atlantis needs before its database
+// is open: where to listen, where the database is, and (optionally) the
+// encryption key. Everything else is set in the web UI and kept in the
+// database. A flag wins over its ATLANTIS_* environment variable; both are
+// optional.
 package config
 
 import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 
 	"github.com/t0mer/atlantis/internal/secret"
 )
 
-// Config is the full configuration.
+// Config is what is fixed when Atlantis starts.
 type Config struct {
-	Server  Server  `mapstructure:"server"`
-	Deco    Deco    `mapstructure:"deco"`
-	Poll    Poll    `mapstructure:"poll"`
-	Store   Store   `mapstructure:"store"`
-	Metrics Metrics `mapstructure:"metrics"`
-	Notify  Notify  `mapstructure:"notify"`
-	OpenWA  OpenWA  `mapstructure:"openwa"`
-	Debug   Debug   `mapstructure:"debug"`
-	Log     Log     `mapstructure:"log"`
+	Listen    string // --server-listen, ATLANTIS_SERVER_LISTEN
+	StorePath string // --store-path, ATLANTIS_STORE_PATH
 	// SecretKey is the base64 32-byte key that encrypts stored secrets
-	// (ATLANTIS_SECRET_KEY). Generate one with `atlantis keygen`.
-	SecretKey string `mapstructure:"secret_key"`
+	// (ATLANTIS_SECRET_KEY). Without it, a key file is kept next to the
+	// database and created on first start.
+	SecretKey string
 }
 
-type Server struct {
-	Listen         string   `mapstructure:"listen"`
-	BaseURL        string   `mapstructure:"base_url"`
-	TrustedProxies []string `mapstructure:"trusted_proxies"`
-}
-
-// Deco is how to reach the site's main Deco.
-type Deco struct {
-	// Transport is "ssh" (the Deco app's LAN transport, default) or "luci"
-	// (the local web API, where the firmware has it).
-	Transport string `mapstructure:"transport"`
-	Host      string `mapstructure:"host"`
-	Port      int    `mapstructure:"port"` // SSH port; 0 = discover with TDP
-	// Email and Password are the TP-Link ID (ssh) or the local management
-	// password (luci). A password given here is moved, encrypted, into the
-	// database on first start.
-	Email    string `mapstructure:"email"`
-	Password string `mapstructure:"password"`
-	HostKey  string `mapstructure:"host_key"` // SSH host key fingerprint to pin
-	TLSPin   string `mapstructure:"tls_pin"`  // luci over https
-}
-
-type Poll struct {
-	Fast               time.Duration `mapstructure:"fast"`
-	Slow               time.Duration `mapstructure:"slow"`
-	OfflineAfterMisses int           `mapstructure:"offline_after_misses"`
-}
-
-type Store struct {
-	Path            string        `mapstructure:"path"`
-	RawRetention    time.Duration `mapstructure:"raw_retention"`
-	RollupRetention time.Duration `mapstructure:"rollup_retention"`
-}
-
-type Metrics struct {
-	Enabled   bool   `mapstructure:"enabled"`
-	Path      string `mapstructure:"path"`
-	PerClient string `mapstructure:"per_client"` // all, watched, none
-	// Token is the bearer token Prometheus sends to scrape metrics. Without
-	// one, metrics need a logged-in session (they are never public).
-	Token string `mapstructure:"token"`
-}
-
-type Notify struct {
-	QuietHours string `mapstructure:"quiet_hours"` // "23:00-07:00", empty = none
-	Timezone   string `mapstructure:"timezone"`
-}
-
-type OpenWA struct {
-	URL         string `mapstructure:"url"`
-	APIKey      string `mapstructure:"api_key"`
-	DefaultChat string `mapstructure:"default_chat"`
-}
-
-type Debug struct {
-	Enabled bool `mapstructure:"enabled"`
-}
-
-type Log struct {
-	Level  string `mapstructure:"level"`  // debug, info, warn, error
-	Format string `mapstructure:"format"` // json, text
-}
+// Defaults.
+const (
+	DefaultListen = ":8080"
+	// DefaultStorePath is relative to the working directory: /data in the
+	// container image, the current directory otherwise.
+	DefaultStorePath = "atlantis.db"
+)
 
 // MinPoll is the smallest allowed poll interval.
 const MinPoll = 10 * time.Second
 
-func setDefaults(v *viper.Viper) {
-	v.SetDefault("server.listen", ":8080")
-	v.SetDefault("deco.transport", "ssh")
-	v.SetDefault("poll.fast", 30*time.Second)
-	v.SetDefault("poll.slow", 5*time.Minute)
-	v.SetDefault("poll.offline_after_misses", 2)
-	// Relative to the working directory: /data in the container image,
-	// next to the binary otherwise. The secret key file goes beside it.
-	v.SetDefault("store.path", "atlantis.db")
-	v.SetDefault("store.raw_retention", 168*time.Hour)
-	v.SetDefault("store.rollup_retention", 2160*time.Hour)
-	v.SetDefault("metrics.enabled", true)
-	v.SetDefault("metrics.path", "/metrics")
-	v.SetDefault("metrics.per_client", "watched")
-	v.SetDefault("notify.timezone", "UTC")
-	v.SetDefault("log.level", "info")
-	v.SetDefault("log.format", "json")
-}
-
-// keys lists every setting, so environment variables bind even when the
-// key is absent from the YAML file.
-var keys = []string{
-	"server.listen", "server.base_url", "server.trusted_proxies",
-	"deco.transport", "deco.host", "deco.port", "deco.email", "deco.password", "deco.host_key", "deco.tls_pin",
-	"poll.fast", "poll.slow", "poll.offline_after_misses",
-	"store.path", "store.raw_retention", "store.rollup_retention",
-	"metrics.enabled", "metrics.path", "metrics.per_client", "metrics.token",
-	"notify.quiet_hours", "notify.timezone",
-	"openwa.url", "openwa.api_key", "openwa.default_chat",
-	"debug.enabled", "log.level", "log.format", "secret_key",
-}
-
-// Load reads the YAML file at path (optional; "" skips it), the
-// environment and flags. Flags are bound by the setting name with dots
-// replaced by dashes (e.g. --deco-host, --server-listen).
-func Load(path string, flags *pflag.FlagSet) (*Config, error) {
-	v := viper.New()
-	setDefaults(v)
-	v.SetEnvPrefix("ATLANTIS")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
-	for _, k := range keys {
-		if err := v.BindEnv(k); err != nil {
-			return nil, err
-		}
-		if flags != nil {
-			if f := flags.Lookup(strings.ReplaceAll(k, ".", "-")); f != nil {
-				if err := v.BindPFlag(k, f); err != nil {
-					return nil, err
-				}
+// Load reads the environment and then flags (flags may be nil).
+func Load(flags *pflag.FlagSet) (*Config, error) {
+	c := &Config{
+		Listen:    os.Getenv("ATLANTIS_SERVER_LISTEN"),
+		StorePath: os.Getenv("ATLANTIS_STORE_PATH"),
+		SecretKey: os.Getenv("ATLANTIS_SECRET_KEY"),
+	}
+	if flags != nil {
+		for name, into := range map[string]*string{"server-listen": &c.Listen, "store-path": &c.StorePath} {
+			if f := flags.Lookup(name); f != nil && f.Changed {
+				*into = f.Value.String()
 			}
 		}
 	}
-	if path != "" {
-		v.SetConfigFile(path)
-		if err := v.ReadInConfig(); err != nil {
-			return nil, fmt.Errorf("reading %s: %w", path, err)
-		}
+	if c.Listen == "" {
+		c.Listen = DefaultListen
 	}
-	var c Config
-	if err := v.Unmarshal(&c); err != nil {
-		return nil, fmt.Errorf("parsing configuration: %w", err)
+	if c.StorePath == "" {
+		c.StorePath = DefaultStorePath
 	}
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	return &c, nil
+	return c, nil
 }
 
 // Validate reports every invalid setting at once.
 func (c *Config) Validate() error {
 	var errs []error
-	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
-	if _, _, err := net.SplitHostPort(c.Server.Listen); err != nil {
-		bad("server.listen %q: %v", c.Server.Listen, err)
+	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+		errs = append(errs, fmt.Errorf("listen address %q: %v", c.Listen, err))
 	}
-	// The Deco can also be added from the UI, so these settings are
-	// optional; when a host is given here, it must be complete.
-	switch c.Deco.Transport {
-	case "ssh":
-		if c.Deco.Host != "" && c.Deco.Email == "" {
-			bad("deco.email (the TP-Link ID) is required with deco.host for the ssh transport")
-		}
-	case "luci":
-	default:
-		bad("deco.transport must be ssh or luci, not %q", c.Deco.Transport)
+	if c.StorePath == "" {
+		errs = append(errs, errors.New("the database path is empty"))
 	}
-	if c.Deco.Port < 0 || c.Deco.Port > 65535 {
-		bad("deco.port %d is out of range", c.Deco.Port)
-	}
-	if c.Poll.Fast < MinPoll || c.Poll.Slow < MinPoll {
-		bad("poll intervals must be at least %s (fast %s, slow %s)", MinPoll, c.Poll.Fast, c.Poll.Slow)
-	}
-	if c.Poll.OfflineAfterMisses < 1 {
-		bad("poll.offline_after_misses must be at least 1")
-	}
-	if c.Store.Path == "" {
-		bad("store.path is required")
-	}
-	if c.Store.RawRetention <= 0 || c.Store.RollupRetention < c.Store.RawRetention {
-		bad("store retention: raw must be positive and rollup at least as long as raw")
-	}
-	switch c.Metrics.PerClient {
-	case "all", "watched", "none":
-	default:
-		bad("metrics.per_client must be all, watched or none, not %q", c.Metrics.PerClient)
-	}
-	if !strings.HasPrefix(c.Metrics.Path, "/") {
-		bad("metrics.path must start with /")
-	}
-	if _, err := time.LoadLocation(c.Notify.Timezone); err != nil {
-		bad("notify.timezone %q: %v", c.Notify.Timezone, err)
-	}
-	if c.Notify.QuietHours != "" {
-		if _, _, err := ParseQuietHours(c.Notify.QuietHours); err != nil {
-			bad("notify.quiet_hours: %v", err)
-		}
-	}
-	switch c.Log.Level {
-	case "debug", "info", "warn", "error":
-	default:
-		bad("log.level must be debug, info, warn or error")
-	}
-	switch c.Log.Format {
-	case "json", "text":
-	default:
-		bad("log.format must be json or text")
-	}
-	// Optional: without it, a key file is kept next to the database.
 	if c.SecretKey != "" {
 		if _, err := secret.New(c.SecretKey); err != nil {
-			bad("ATLANTIS_SECRET_KEY: %v (generate one with `atlantis keygen`)", err)
+			errs = append(errs, fmt.Errorf("ATLANTIS_SECRET_KEY: %v (generate one with `atlantis keygen`)", err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// obsolete are environment variables earlier versions read. Their settings
+// are now made in the UI.
+var obsolete = []string{
+	"ATLANTIS_CONFIG", "ATLANTIS_SERVER_BASE_URL", "ATLANTIS_SERVER_TRUSTED_PROXIES",
+	"ATLANTIS_DECO_TRANSPORT", "ATLANTIS_DECO_HOST", "ATLANTIS_DECO_PORT", "ATLANTIS_DECO_EMAIL",
+	"ATLANTIS_DECO_PASSWORD", "ATLANTIS_DECO_HOST_KEY", "ATLANTIS_DECO_TLS_PIN",
+	"ATLANTIS_POLL_FAST", "ATLANTIS_POLL_SLOW", "ATLANTIS_POLL_OFFLINE_AFTER_MISSES",
+	"ATLANTIS_STORE_RAW_RETENTION", "ATLANTIS_STORE_ROLLUP_RETENTION",
+	"ATLANTIS_METRICS_ENABLED", "ATLANTIS_METRICS_PATH", "ATLANTIS_METRICS_PER_CLIENT", "ATLANTIS_METRICS_TOKEN",
+	"ATLANTIS_NOTIFY_QUIET_HOURS", "ATLANTIS_NOTIFY_TIMEZONE",
+	"ATLANTIS_OPENWA_URL", "ATLANTIS_OPENWA_API_KEY", "ATLANTIS_OPENWA_DEFAULT_CHAT",
+	"ATLANTIS_DEBUG_ENABLED", "ATLANTIS_LOG_LEVEL", "ATLANTIS_LOG_FORMAT",
+}
+
+// Obsolete lists the old environment variables that are still set, so
+// the server can say they are no longer read.
+func Obsolete() []string {
+	var out []string
+	for _, k := range obsolete {
+		if _, ok := os.LookupEnv(k); ok {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // ParseQuietHours parses "HH:MM-HH:MM" into minutes after midnight. The

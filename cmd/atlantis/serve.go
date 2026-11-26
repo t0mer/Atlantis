@@ -13,10 +13,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/t0mer/atlantis/internal/api"
 	"github.com/t0mer/atlantis/internal/config"
@@ -31,36 +33,49 @@ import (
 )
 
 func newServeCmd() *cobra.Command {
-	var cfgPath string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the Atlantis server: poll the Deco, keep history, serve the API and UI",
-		Long: `Runs Atlantis for one Deco site on the LAN. Settings come from flags, then
-ATLANTIS_* environment variables, then the YAML file given with --config (or
-ATLANTIS_CONFIG). ATLANTIS_SECRET_KEY is required: generate it once with
-"atlantis keygen" and keep it, or stored secrets cannot be read.`,
+		Long: `Runs Atlantis for one Deco site on the LAN. Everything is set up in the web
+UI and kept in the database; only where to listen and where the database is
+can be given here (or in ATLANTIS_SERVER_LISTEN and ATLANTIS_STORE_PATH). The
+key that encrypts stored passwords is created as secret.key next to the
+database; ATLANTIS_SECRET_KEY can supply it instead.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if cfgPath == "" {
-				cfgPath = os.Getenv("ATLANTIS_CONFIG")
-			}
-			cfg, err := config.Load(cfgPath, cmd.Flags())
+			cfg, err := config.Load(cmd.Flags())
 			if err != nil {
 				return err
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			return serve(ctx, cfg, newLogger(cfg.Log, os.Stderr))
+			log := newLogger(os.Stderr)
+			warnRemovedFlags(cmd, log)
+			return serve(ctx, cfg, log)
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&cfgPath, "config", "", "YAML configuration file (or ATLANTIS_CONFIG)")
-	f.String("server-listen", "", "listen address, e.g. :8080")
-	f.String("deco-host", "", "main Deco IP address")
-	f.String("deco-transport", "", "ssh (default) or luci")
-	f.String("deco-email", "", "TP-Link ID email (ssh)")
-	f.String("store-path", "", "SQLite database path")
-	f.String("log-level", "", "debug, info, warn or error")
+	f.String("server-listen", config.DefaultListen, "listen address (or ATLANTIS_SERVER_LISTEN)")
+	f.String("store-path", config.DefaultStorePath, "SQLite database path (or ATLANTIS_STORE_PATH)")
+	addRemovedFlags(cmd, "config", "deco-host", "deco-transport", "deco-email", "log-level")
 	return cmd
+}
+
+// addRemovedFlags keeps flags earlier versions had, hidden and ignored, so
+// an existing command line still starts.
+func addRemovedFlags(cmd *cobra.Command, names ...string) {
+	for _, n := range names {
+		cmd.Flags().String(n, "", "no longer used")
+		_ = cmd.Flags().MarkHidden(n)
+	}
+}
+
+// warnRemovedFlags names the ignored flags that were given.
+func warnRemovedFlags(cmd *cobra.Command, log *slog.Logger) {
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if f.Hidden && f.Changed {
+			log.Warn("--" + f.Name + " is no longer used; make this setting in the web UI (Settings)")
+		}
+	})
 }
 
 // secretAttr reports attribute keys whose values must never be logged.
@@ -74,29 +89,62 @@ func secretAttr(k string) bool {
 	return false
 }
 
-// logLevel is the process's log level; Settings can change it at runtime.
-var logLevel = new(slog.LevelVar)
+// The process's log level and format; Settings changes them at runtime.
+var (
+	logLevel = new(slog.LevelVar)
+	logText  = new(atomic.Bool)
+)
 
-// setLogLevel applies a level name (debug, info, warn, error).
-func setLogLevel(name string) {
+// setLogging applies a level (debug, info, warn, error) and a format
+// (json, text).
+func setLogging(level, format string) {
 	var lvl slog.Level
-	if lvl.UnmarshalText([]byte(name)) == nil {
+	if lvl.UnmarshalText([]byte(level)) == nil {
 		logLevel.Set(lvl)
 	}
+	logText.Store(format == "text")
 }
 
-func newLogger(c config.Log, w io.Writer) *slog.Logger {
-	setLogLevel(c.Level)
+// newLogger logs JSON until Settings choose otherwise, never logging a
+// secret attribute's value.
+func newLogger(w io.Writer) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: logLevel, ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 		if secretAttr(a.Key) {
 			return slog.String(a.Key, "[redacted]")
 		}
 		return a
 	}}
-	if c.Format == "text" {
-		return slog.New(slog.NewTextHandler(w, opts))
+	return slog.New(formatHandler{json: slog.NewJSONHandler(w, opts), text: slog.NewTextHandler(w, opts), useText: logText})
+}
+
+// formatHandler writes each record as JSON or text, whichever is current.
+// Both handlers carry the same attributes and groups.
+type formatHandler struct {
+	json, text slog.Handler
+	useText    *atomic.Bool
+}
+
+func (h formatHandler) pick() slog.Handler {
+	if h.useText.Load() {
+		return h.text
 	}
-	return slog.New(slog.NewJSONHandler(w, opts))
+	return h.json
+}
+
+func (h formatHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	return h.pick().Enabled(ctx, l)
+}
+
+func (h formatHandler) Handle(ctx context.Context, r slog.Record) error {
+	return h.pick().Handle(ctx, r)
+}
+
+func (h formatHandler) WithAttrs(a []slog.Attr) slog.Handler {
+	return formatHandler{json: h.json.WithAttrs(a), text: h.text.WithAttrs(a), useText: h.useText}
+}
+
+func (h formatHandler) WithGroup(name string) slog.Handler {
+	return formatHandler{json: h.json.WithGroup(name), text: h.text.WithGroup(name), useText: h.useText}
 }
 
 func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
@@ -104,10 +152,13 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// abandoned notification send cannot hang for ever.
 	http.DefaultClient.Timeout = 30 * time.Second
 
-	cfg.Store.Path = legacyStorePath(cfg.Store.Path, log)
-	st, err := store.Open(ctx, cfg.Store.Path)
+	for _, k := range config.Obsolete() {
+		log.Warn(k + " is no longer read; make this setting in the web UI (Settings)")
+	}
+	cfg.StorePath = legacyStorePath(cfg.StorePath, log)
+	st, err := store.Open(ctx, cfg.StorePath)
 	if err != nil {
-		return fmt.Errorf("opening %s: %w", cfg.Store.Path, err)
+		return fmt.Errorf("opening %s: %w", cfg.StorePath, err)
 	}
 	defer st.Close()
 	box, keySource, err := openBox(ctx, cfg, st, log)
@@ -115,15 +166,8 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return err
 	}
 
-	if len(cfg.Server.TrustedProxies) > 0 {
-		log.Warn("server.trusted_proxies is not supported and is ignored")
-	}
-	if err := seedDeco(ctx, cfg, st, box, log); err != nil {
-		return err
-	}
-
-	// Settings edited in the UI; the configuration only gives defaults.
-	pf := prefs.New(cfg, st, box)
+	// Everything else is set in the UI (Settings).
+	pf := prefs.New(st, box)
 	if err := pf.Load(ctx); err != nil {
 		log.Error("reading saved settings", "err", err)
 	}
@@ -145,17 +189,20 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		}
 		return run.Network.Host
 	}
-	disp := notify.New(st, box, cfg, siteName, log)
+	disp := notify.New(st, box, siteName, log)
+	if err := moveOpenWADefaults(ctx, st, box, disp, log); err != nil {
+		log.Error("moving the old OpenWA defaults into the WhatsApp channels", "err", err)
+	}
 	pf.OnApply(func(v prefs.Values) {
-		disp.SetPrefs(v.Notify, v.OpenWA)
+		disp.SetPrefs(v.Notify.QuietHours, v.Notify.Timezone)
 		m.SetPerClient(v.Metrics.PerClient)
-		setLogLevel(v.Logging.Level)
+		setLogging(v.Logging.Level, v.Logging.Format)
 	})
 	retention := func() (time.Duration, time.Duration) {
 		h := pf.Get().History
 		return h.RawRetention, h.RollupRetention
 	}
-	sites = site.New(ctx, site.Deps{Config: cfg, Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log, Retention: retention})
+	sites = site.New(ctx, site.Deps{Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log, Retention: retention})
 	if err := sites.LoadPoll(ctx); err != nil {
 		return err
 	}
@@ -165,15 +212,15 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	defer sites.Close(context.Background())
 
-	dataPath := cfg.Store.Path
+	dataPath := cfg.StorePath
 	if abs, err := filepath.Abs(dataPath); err == nil {
 		dataPath = abs
 	}
-	startup := api.Startup{Listen: cfg.Server.Listen, DataPath: dataPath, KeySource: keySource, LogFormat: cfg.Log.Format}
-	srv := api.New(api.Deps{Config: cfg, Store: st, Site: sites, Prefs: pf, Startup: startup, Hub: hub, Notify: disp,
+	startup := api.Startup{Listen: cfg.Listen, DataPath: dataPath, KeySource: keySource}
+	srv := api.New(api.Deps{Store: st, Site: sites, Prefs: pf, Startup: startup, Hub: hub, Notify: disp,
 		Metrics: m.Handler(), Web: web.Handler(), Version: version, Log: log})
 	// Request contexts end with ctx, so live streams stop on shutdown.
-	httpSrv := &http.Server{Addr: cfg.Server.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
+	httpSrv := &http.Server{Addr: cfg.Listen, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
 		BaseContext: func(net.Listener) context.Context { return ctx }}
 
 	var wg sync.WaitGroup
@@ -185,7 +232,7 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		if run := sites.Current(); run != nil {
 			host = run.Network.Host
 		}
-		log.Info("listening", "addr", cfg.Server.Listen, "deco", host, "version", version)
+		log.Info("listening", "addr", cfg.Listen, "deco", host, "version", version)
 		errc <- httpSrv.ListenAndServe()
 	}()
 	select {
@@ -203,39 +250,54 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	return nil
 }
 
-// seedDeco stores the Deco given in the configuration, if any, but only
-// while none is stored: once it exists, the UI owns the connection, so a
-// restart never undoes a change made there (or pairs one Deco's address
-// with another's pinned key). The one exception is a stored Deco that still
-// has no password (seeded without one): the configured password fills it in.
-func seedDeco(ctx context.Context, cfg *config.Config, st *store.Store, box *secret.Box, log *slog.Logger) error {
-	if cfg.Deco.Host == "" {
-		return nil
+// openwaMoved records that moveOpenWADefaults has run.
+const openwaMoved = "migrated.openwa_defaults"
+
+// moveOpenWADefaults copies the OpenWA defaults earlier versions had (saved
+// in Settings, or ATLANTIS_OPENWA_*) into the WhatsApp channels that left
+// those fields empty, then deletes the saved ones. It runs once: later
+// changes to a channel are never overwritten. Channels now carry their own
+// address, chat and key.
+func moveOpenWADefaults(ctx context.Context, st *store.Store, box *secret.Box, disp *notify.Dispatcher, log *slog.Logger) error {
+	var done bool
+	if ok, err := st.GetSetting(ctx, openwaMoved, &done); err != nil || (ok && done) {
+		return err
 	}
-	cur, have, err := st.GetNetwork(ctx)
+	var saved struct {
+		URL         string `json:"url"`
+		DefaultChat string `json:"default_chat"`
+		APIKey      string `json:"api_key"` // sealed
+	}
+	have, err := st.GetSetting(ctx, "openwa", &saved)
 	if err != nil {
 		return err
 	}
-	sealed := ""
-	if cfg.Deco.Password != "" {
-		if sealed, err = box.Seal(cfg.Deco.Password); err != nil {
+	def := notify.Config{URL: saved.URL, Chat: saved.DefaultChat}
+	if have {
+		if def.APIKey, err = box.Open(saved.APIKey); err != nil {
 			return err
 		}
 	}
-	switch {
-	case !have || cur.Host == "": // nothing stored, or a placeholder without an address
-		n := store.Network{ID: cur.ID, Host: cfg.Deco.Host, Port: cfg.Deco.Port, Transport: cfg.Deco.Transport, Email: cfg.Deco.Email,
-			PasswordEnc: sealed, HostKey: cfg.Deco.HostKey, TLSPin: cfg.Deco.TLSPin}
-		_, err = st.SaveNetwork(ctx, n)
-		return err
-	case cur.PasswordEnc == "" && sealed != "" && cur.Host == cfg.Deco.Host:
-		cur.PasswordEnc = sealed
-		_, err = st.SaveNetwork(ctx, cur)
-		return err
-	case cur.Host != cfg.Deco.Host || cur.Email != cfg.Deco.Email:
-		log.Warn("deco.* in the configuration is ignored: a Deco is already stored; change it in Settings", "stored", cur.Host, "configured", cfg.Deco.Host)
+	for into, env := range map[*string]string{&def.URL: "ATLANTIS_OPENWA_URL", &def.APIKey: "ATLANTIS_OPENWA_API_KEY", &def.Chat: "ATLANTIS_OPENWA_DEFAULT_CHAT"} {
+		if *into == "" {
+			*into = strings.TrimSpace(os.Getenv(env))
+		}
 	}
-	return nil
+	if def != (notify.Config{}) {
+		n, err := disp.FillOpenWA(ctx, def)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			log.Info("moved the old OpenWA defaults into the WhatsApp channels", "channels", n)
+		}
+	}
+	if have {
+		if err := st.DeleteSetting(ctx, "openwa"); err != nil {
+			return err
+		}
+	}
+	return st.SetSetting(ctx, openwaMoved, true)
 }
 
 // openBox returns the box for stored secrets. ATLANTIS_SECRET_KEY wins;
@@ -253,7 +315,7 @@ func openBox(ctx context.Context, cfg *config.Config, st *store.Store, log *slog
 	}
 	if _, err := box.Open(sample); err != nil {
 		return nil, "", fmt.Errorf("the encryption key from %s does not match the passwords stored in %s; "+
-			"start Atlantis with the key this database was set up with", source, cfg.Store.Path)
+			"start Atlantis with the key this database was set up with", source, cfg.StorePath)
 	}
 	return box, source, nil
 }
@@ -263,7 +325,7 @@ func chooseKey(ctx context.Context, cfg *config.Config, st *store.Store, log *sl
 		box, err := secret.New(cfg.SecretKey)
 		return box, "environment (ATLANTIS_SECRET_KEY)", err
 	}
-	path := filepath.Join(filepath.Dir(cfg.Store.Path), secret.KeyFileName)
+	path := filepath.Join(filepath.Dir(cfg.StorePath), secret.KeyFileName)
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
@@ -274,7 +336,7 @@ func chooseKey(ctx context.Context, cfg *config.Config, st *store.Store, log *sl
 	key, created, err := secret.LoadKeyFile(path, !sealed)
 	if errors.Is(err, secret.ErrNoKeyFile) {
 		return nil, "", fmt.Errorf("%s holds encrypted passwords, but there is no ATLANTIS_SECRET_KEY and no %s: "+
-			"set ATLANTIS_SECRET_KEY to the key this database was used with", cfg.Store.Path, path)
+			"set ATLANTIS_SECRET_KEY to the key this database was used with", cfg.StorePath, path)
 	}
 	if err != nil {
 		return nil, "", err
@@ -296,7 +358,7 @@ const oldDefaultStore = "/data/atlantis.db"
 // with the new default and no database in the working directory, an
 // existing database at the old default path is used.
 func legacyStorePath(path string, log *slog.Logger) string {
-	if path != "atlantis.db" {
+	if path != config.DefaultStorePath {
 		return path
 	}
 	if _, err := os.Stat(path); err == nil {

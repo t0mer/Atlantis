@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 
+	"github.com/t0mer/atlantis/internal/config"
 	"github.com/t0mer/atlantis/internal/secret"
 )
 
@@ -26,13 +26,16 @@ once and keep it: stored secrets cannot be read without it.`,
 
 // newHealthcheckCmd is for container health checks (no shell in the image).
 func newHealthcheckCmd() *cobra.Command {
-	var url, cfgPath string
+	var url string
 	cmd := &cobra.Command{
 		Use:   "healthcheck",
 		Short: "Exit 0 when the local server answers /health",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if url == "" {
-				listen := healthListen(cfgPath)
+				listen := os.Getenv("ATLANTIS_SERVER_LISTEN")
+				if listen == "" {
+					listen = config.DefaultListen
+				}
 				_, port, err := net.SplitHostPort(listen)
 				if err != nil {
 					return err
@@ -53,28 +56,7 @@ func newHealthcheckCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&url, "url", "", "health URL (default: server.listen from the config, env, or :8080)")
-	cmd.Flags().StringVar(&cfgPath, "config", "", "YAML configuration file (or ATLANTIS_CONFIG)")
+	cmd.Flags().StringVar(&url, "url", "", "health URL (default: from ATLANTIS_SERVER_LISTEN, or :8080)")
+	addRemovedFlags(cmd, "config")
 	return cmd
-}
-
-// healthListen finds server.listen the way serve does (env over YAML),
-// without requiring the rest of the configuration to be valid.
-func healthListen(cfgPath string) string {
-	if v := os.Getenv("ATLANTIS_SERVER_LISTEN"); v != "" {
-		return v
-	}
-	if cfgPath == "" {
-		cfgPath = os.Getenv("ATLANTIS_CONFIG")
-	}
-	if cfgPath != "" {
-		v := viper.New()
-		v.SetConfigFile(cfgPath)
-		if v.ReadInConfig() == nil {
-			if l := v.GetString("server.listen"); l != "" {
-				return l
-			}
-		}
-	}
-	return ":8080"
 }
