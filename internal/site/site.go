@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/t0mer/atlantis/internal/config"
 	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/deco/luci"
 	"github.com/t0mer/atlantis/internal/deco/tmp"
@@ -24,6 +23,7 @@ import (
 	"github.com/t0mer/atlantis/internal/deco/tmpclient"
 	"github.com/t0mer/atlantis/internal/metrics"
 	"github.com/t0mer/atlantis/internal/poller"
+	"github.com/t0mer/atlantis/internal/prefs"
 	"github.com/t0mer/atlantis/internal/secret"
 	"github.com/t0mer/atlantis/internal/session"
 	"github.com/t0mer/atlantis/internal/store"
@@ -72,7 +72,6 @@ type Builder func(ctx context.Context, n store.Network, password string, keys *H
 
 // Deps are the site's collaborators.
 type Deps struct {
-	Config  *config.Config
 	Store   *store.Store
 	Box     *secret.Box
 	Hub     *poller.Hub
@@ -81,8 +80,10 @@ type Deps struct {
 	Log     *slog.Logger
 	Build   Builder // nil = the real transports
 	// Retention returns the current history retention (Settings); nil
-	// keeps the configuration's values.
+	// keeps the defaults.
 	Retention func() (raw, rollup time.Duration)
+	// Poll is the refresh intervals until some are saved; zero = DefaultPoll.
+	Poll Poll
 }
 
 // Site owns the current Run.
@@ -104,7 +105,11 @@ func New(ctx context.Context, d Deps) *Site {
 	if d.Build == nil {
 		d.Build = Build
 	}
-	return &Site{d: d, root: ctx, poll: Poll{Fast: d.Config.Poll.Fast, Slow: d.Config.Poll.Slow, OfflineAfterMisses: d.Config.Poll.OfflineAfterMisses}}
+	poll := d.Poll
+	if poll == (Poll{}) {
+		poll = DefaultPoll
+	}
+	return &Site{d: d, root: ctx, poll: poll}
 }
 
 // Current returns the running connection, or nil when no Deco is connected.
@@ -166,9 +171,9 @@ func (s *Site) start(ctx context.Context, n store.Network, password string, keys
 		s.d.Log.Info("deco session", "state", st.State, "error", st.Error)
 	})
 	pl := s.Poll()
-	c := s.d.Config
+	h := prefs.Defaults().History
 	p, err := poller.New(ctx, poller.Options{NetworkID: n.ID, Fast: pl.Fast, Slow: pl.Slow, OfflineAfter: pl.OfflineAfterMisses,
-		RawRetention: c.Store.RawRetention, RollupRetention: c.Store.RollupRetention, Retention: s.d.Retention}, sess, s.d.Store, s.d.Notify, s.d.Metrics, s.d.Hub, s.d.Log)
+		RawRetention: h.RawRetention, RollupRetention: h.RollupRetention, Retention: s.d.Retention}, sess, s.d.Store, s.d.Notify, s.d.Metrics, s.d.Hub, s.d.Log)
 	if err != nil {
 		return err
 	}

@@ -1,8 +1,7 @@
 // Package prefs holds the settings that are edited in the web UI (Settings)
-// and saved in the database. Values from the YAML file or the environment
-// are only defaults: a value saved in the UI always wins. Each change is
-// validated, saved and then applied to the running components through
-// callbacks, so nothing needs a restart.
+// and saved in the database; until a section is saved, its built-in
+// default applies. Each change is validated, saved and then applied to the
+// running components through callbacks, so nothing needs a restart.
 package prefs
 
 import (
@@ -27,25 +26,33 @@ const (
 	History = "history"
 	Metrics = "metrics"
 	Notify  = "notifications"
-	OpenWA  = "openwa"
 	Access  = "access"
 	Logging = "logging"
 	Debug   = "debug"
 )
 
 // Sections lists every section, in display order.
-var Sections = []string{History, Metrics, Notify, OpenWA, Access, Logging, Debug}
+var Sections = []string{History, Metrics, Notify, Access, Logging, Debug}
 
-// Values are the settings in effect. Secrets (Metrics.Token, OpenWA.APIKey)
-// are plain here; they are sealed in the database and never sent to the UI.
+// Values are the settings in effect. The secret (Metrics.Token) is plain
+// here; it is sealed in the database and never sent to the UI.
 type Values struct {
 	History HistoryPrefs
-	Metrics config.Metrics
-	Notify  config.Notify
-	OpenWA  config.OpenWA
+	Metrics MetricsPrefs
+	Notify  NotifyPrefs
 	Access  AccessPrefs
 	Logging LoggingPrefs
-	Debug   config.Debug
+	Debug   DebugPrefs
+}
+
+// Defaults are the values used until a section is saved.
+func Defaults() Values {
+	return Values{
+		History: HistoryPrefs{RawRetention: 7 * 24 * time.Hour, RollupRetention: 90 * 24 * time.Hour},
+		Metrics: MetricsPrefs{Enabled: true, Path: "/metrics", PerClient: "watched"},
+		Notify:  NotifyPrefs{Timezone: "UTC"},
+		Logging: LoggingPrefs{Level: "info", Format: "json"},
+	}
 }
 
 // HistoryPrefs is how long history is kept.
@@ -59,9 +66,31 @@ type AccessPrefs struct {
 	BaseURL string `json:"base_url"` // public URL; https:// marks the session cookie Secure
 }
 
-// LoggingPrefs is the log level (the format is set at startup).
+// MetricsPrefs is the Prometheus endpoint.
+type MetricsPrefs struct {
+	Enabled   bool
+	Path      string
+	PerClient string // all, watched, none
+	// Token is the bearer token Prometheus sends to scrape metrics. Without
+	// one, metrics need a logged-in session (they are never public).
+	Token string
+}
+
+// NotifyPrefs is when notifications are held back.
+type NotifyPrefs struct {
+	QuietHours string `json:"quiet_hours"` // "23:00-07:00", empty = none
+	Timezone   string `json:"timezone"`
+}
+
+// LoggingPrefs is the log level and format.
 type LoggingPrefs struct {
-	Level string `json:"level"`
+	Level  string `json:"level"`  // debug, info, warn, error
+	Format string `json:"format"` // json, text
+}
+
+// DebugPrefs turns on the raw Deco endpoint.
+type DebugPrefs struct {
+	Enabled bool `json:"enabled"`
 }
 
 // Patch changes some sections. Nil sections stay as they are. For the
@@ -69,14 +98,13 @@ type LoggingPrefs struct {
 type Patch struct {
 	History *HistoryPrefs
 	Metrics *MetricsPatch
-	Notify  *config.Notify
-	OpenWA  *OpenWAPatch
+	Notify  *NotifyPrefs
 	Access  *AccessPrefs
 	Logging *LoggingPrefs
-	Debug   *config.Debug
+	Debug   *DebugPrefs
 }
 
-// MetricsPatch is config.Metrics with a keep-or-replace token.
+// MetricsPatch is MetricsPrefs with a keep-or-replace token.
 type MetricsPatch struct {
 	Enabled   bool
 	Path      string
@@ -84,37 +112,21 @@ type MetricsPatch struct {
 	Token     *string
 }
 
-// OpenWAPatch is config.OpenWA with a keep-or-replace API key.
-type OpenWAPatch struct {
-	URL         string
-	DefaultChat string
-	APIKey      *string
-}
-
 // Prefs is the store of UI settings. It is safe for concurrent use.
 type Prefs struct {
 	st  *store.Store
 	box *secret.Box
 
-	mu     sync.RWMutex
-	v      Values
-	fromUI map[string]bool
+	mu sync.RWMutex
+	v  Values
 
 	set     sync.Mutex // serialises Update: what is saved is what runs
 	onApply []func(Values)
 }
 
-// New starts from the configuration's values.
-func New(cfg *config.Config, st *store.Store, box *secret.Box) *Prefs {
-	return &Prefs{st: st, box: box, fromUI: map[string]bool{}, v: Values{
-		History: HistoryPrefs{RawRetention: cfg.Store.RawRetention, RollupRetention: cfg.Store.RollupRetention},
-		Metrics: cfg.Metrics,
-		Notify:  cfg.Notify,
-		OpenWA:  cfg.OpenWA,
-		Access:  AccessPrefs{BaseURL: cfg.Server.BaseURL},
-		Logging: LoggingPrefs{Level: cfg.Log.Level},
-		Debug:   cfg.Debug,
-	}}
+// New starts from the defaults; Load reads what was saved.
+func New(st *store.Store, box *secret.Box) *Prefs {
+	return &Prefs{st: st, box: box, v: Defaults()}
 }
 
 // OnApply registers fn to receive the values now and after every change.
@@ -132,16 +144,8 @@ func (p *Prefs) Get() Values {
 	return p.v
 }
 
-// FromUI reports whether a section was saved in the UI (otherwise it comes
-// from the configuration).
-func (p *Prefs) FromUI(section string) bool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.fromUI[section]
-}
-
-// Load reads the sections saved in the UI. A saved section that no longer
-// validates is ignored with an error, and the configuration's value stays.
+// Load reads the saved sections. A saved section that no longer validates
+// is ignored with an error, and its default applies.
 func (p *Prefs) Load(ctx context.Context) error {
 	p.set.Lock()
 	defer p.set.Unlock()
@@ -164,47 +168,37 @@ func (p *Prefs) Load(ctx context.Context) error {
 		if tok, err := p.box.Open(m.Token); err != nil {
 			errs = append(errs, fmt.Errorf("metrics token: %w", err))
 		} else {
-			v.Metrics = config.Metrics{Enabled: m.Enabled, Path: m.Path, PerClient: m.PerClient, Token: tok}
+			v.Metrics = MetricsPrefs{Enabled: m.Enabled, Path: m.Path, PerClient: m.PerClient, Token: tok}
 			from[Metrics] = true
 		}
 	}
-	var n config.Notify
+	var n NotifyPrefs
 	if load(Notify, &n) {
 		v.Notify, from[Notify] = n, true
-	}
-	var o savedOpenWA
-	if load(OpenWA, &o) {
-		if key, err := p.box.Open(o.APIKey); err != nil {
-			errs = append(errs, fmt.Errorf("openwa key: %w", err))
-		} else {
-			v.OpenWA = config.OpenWA{URL: o.URL, DefaultChat: o.DefaultChat, APIKey: key}
-			from[OpenWA] = true
-		}
 	}
 	var a AccessPrefs
 	if load(Access, &a) {
 		v.Access, from[Access] = a, true
 	}
-	var l LoggingPrefs
+	l := Defaults().Logging // a level saved before the format existed keeps the default format
 	if load(Logging, &l) {
 		v.Logging, from[Logging] = l, true
 	}
-	var d config.Debug
+	var d DebugPrefs
 	if load(Debug, &d) {
 		v.Debug, from[Debug] = d, true
 	}
-	// A saved section that no longer validates falls back to the
-	// configuration's value on its own; the other sections are kept.
-	cfgv := p.Get()
+	// A saved section that no longer validates falls back to its default on
+	// its own; the other sections are kept.
+	def := Defaults()
 	for sec := range from {
 		if err := validateSection(sec, v); err != nil {
-			errs = append(errs, fmt.Errorf("saved %s settings are not valid, using the configuration: %w", sec, err))
-			setSection(&v, cfgv, sec)
-			delete(from, sec)
+			errs = append(errs, fmt.Errorf("saved %s settings are not valid, using the default: %w", sec, err))
+			setSection(&v, def, sec)
 		}
 	}
 	p.mu.Lock()
-	p.v, p.fromUI = v, from
+	p.v = v
 	p.mu.Unlock()
 	for _, fn := range p.onApply {
 		fn(v)
@@ -217,12 +211,6 @@ type savedMetrics struct {
 	Path      string `json:"path"`
 	PerClient string `json:"per_client"`
 	Token     string `json:"token"` // sealed
-}
-
-type savedOpenWA struct {
-	URL         string `json:"url"`
-	DefaultChat string `json:"default_chat"`
-	APIKey      string `json:"api_key"` // sealed
 }
 
 // apply returns the values with the patch applied and the changed
@@ -239,27 +227,26 @@ func (p *Prefs) apply(pt Patch) (Values, []string, error) {
 		if pt.Metrics.Token != nil {
 			tok = strings.TrimSpace(*pt.Metrics.Token)
 		}
-		v.Metrics = config.Metrics{Enabled: pt.Metrics.Enabled, Path: strings.TrimSpace(pt.Metrics.Path), PerClient: pt.Metrics.PerClient, Token: tok}
+		v.Metrics = MetricsPrefs{Enabled: pt.Metrics.Enabled, Path: strings.TrimSpace(pt.Metrics.Path), PerClient: pt.Metrics.PerClient, Token: tok}
 		changed = append(changed, Metrics)
 	}
 	if pt.Notify != nil {
 		v.Notify = *pt.Notify
 		changed = append(changed, Notify)
 	}
-	if pt.OpenWA != nil {
-		key := v.OpenWA.APIKey
-		if pt.OpenWA.APIKey != nil {
-			key = *pt.OpenWA.APIKey
-		}
-		v.OpenWA = config.OpenWA{URL: strings.TrimSpace(pt.OpenWA.URL), DefaultChat: strings.TrimSpace(pt.OpenWA.DefaultChat), APIKey: strings.TrimSpace(key)}
-		changed = append(changed, OpenWA)
-	}
 	if pt.Access != nil {
 		v.Access = AccessPrefs{BaseURL: normalizeURL(pt.Access.BaseURL)}
 		changed = append(changed, Access)
 	}
 	if pt.Logging != nil {
-		v.Logging = *pt.Logging
+		l := *pt.Logging // an empty field keeps its value
+		if l.Level == "" {
+			l.Level = v.Logging.Level
+		}
+		if l.Format == "" {
+			l.Format = v.Logging.Format
+		}
+		v.Logging = l
 		changed = append(changed, Logging)
 	}
 	if pt.Debug != nil {
@@ -288,7 +275,7 @@ func (pt Patch) Sections() []string {
 	for _, s := range []struct {
 		name string
 		set  bool
-	}{{History, pt.History != nil}, {Metrics, pt.Metrics != nil}, {Notify, pt.Notify != nil}, {OpenWA, pt.OpenWA != nil},
+	}{{History, pt.History != nil}, {Metrics, pt.Metrics != nil}, {Notify, pt.Notify != nil},
 		{Access, pt.Access != nil}, {Logging, pt.Logging != nil}, {Debug, pt.Debug != nil}} {
 		if s.set {
 			out = append(out, s.name)
@@ -320,9 +307,6 @@ func (p *Prefs) Update(ctx context.Context, pt Patch) ([]string, error) {
 	}
 	p.mu.Lock()
 	p.v = v
-	for _, sec := range changed {
-		p.fromUI[sec] = true
-	}
 	p.mu.Unlock()
 	for _, fn := range p.onApply {
 		fn(v)
@@ -344,12 +328,6 @@ func (p *Prefs) stored(section string, v Values) (any, error) {
 		val = savedMetrics{Enabled: v.Metrics.Enabled, Path: v.Metrics.Path, PerClient: v.Metrics.PerClient, Token: tok}
 	case Notify:
 		val = v.Notify
-	case OpenWA:
-		key, err := p.box.Seal(v.OpenWA.APIKey)
-		if err != nil {
-			return nil, err
-		}
-		val = savedOpenWA{URL: v.OpenWA.URL, DefaultChat: v.OpenWA.DefaultChat, APIKey: key}
 	case Access:
 		val = v.Access
 	case Logging:
@@ -369,8 +347,6 @@ func setSection(v *Values, src Values, section string) {
 		v.Metrics = src.Metrics
 	case Notify:
 		v.Notify = src.Notify
-	case OpenWA:
-		v.OpenWA = src.OpenWA
 	case Access:
 		v.Access = src.Access
 	case Logging:
@@ -446,13 +422,6 @@ func validateSection(section string, v Values) error {
 		} else if _, err := time.LoadLocation(n.Timezone); err != nil {
 			bad("unknown time zone %q", n.Timezone)
 		}
-	case OpenWA:
-		if err := checkURL(v.OpenWA.URL); err != nil {
-			bad("OpenWA URL: %v", err)
-		}
-		if len(v.OpenWA.APIKey) > 512 || len(v.OpenWA.DefaultChat) > 128 {
-			bad("OpenWA key or chat is too long")
-		}
 	case Access:
 		if err := checkURL(v.Access.BaseURL); err != nil {
 			bad("public address: %v", err)
@@ -462,6 +431,11 @@ func validateSection(section string, v Values) error {
 		case "debug", "info", "warn", "error":
 		default:
 			bad("the log level must be debug, info, warn or error")
+		}
+		switch v.Logging.Format {
+		case "json", "text":
+		default:
+			bad("the log format must be json or text")
 		}
 	}
 	return errors.Join(errs...)
