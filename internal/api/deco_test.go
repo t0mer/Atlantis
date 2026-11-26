@@ -72,7 +72,7 @@ func TestRefreshIntervals(t *testing.T) {
 	e := newEnv(t)
 	e.login(t)
 	_, m, _ := e.do(t, "GET", "/api/v1/settings", "", false)
-	if p := m["poll"].(map[string]any); p["fast"] != "1m0s" || p["source"] != "config" {
+	if p := m["poll"].(map[string]any); p["fast"] != "1m0s" || p["source"] != nil {
 		t.Fatalf("%v", p)
 	}
 	for _, bad := range []string{
@@ -88,7 +88,7 @@ func TestRefreshIntervals(t *testing.T) {
 		}
 	}
 	code, m, _ := e.do(t, "PUT", "/api/v1/settings", `{"poll":{"fast":"15s","slow":"2m","offline_after_misses":3}}`, true)
-	if p := m["poll"].(map[string]any); code != 200 || p["fast"] != "15s" || p["slow"] != "2m0s" || p["offline_after_misses"] != float64(3) || p["source"] != "ui" {
+	if p := m["poll"].(map[string]any); code != 200 || p["fast"] != "15s" || p["slow"] != "2m0s" || p["offline_after_misses"] != float64(3) {
 		t.Fatalf("%d %v", code, m)
 	}
 }
@@ -129,17 +129,20 @@ func TestSettingsSectionsApplyAtOnce(t *testing.T) {
 	e.login(t)
 	// Metrics are served at the configured path; the token is write-only.
 	code, m, _ := e.do(t, "PUT", "/api/v1/settings", `{"metrics":{"enabled":true,"path":"/prom","per_client":"all","token":"scrape-me"},
-		"debug":{"enabled":false},"logging":{"level":"debug"},"history":{"raw_retention":"48h","rollup_retention":"720h"},
-		"notifications":{"quiet_hours":"23:00-07:00","timezone":"Asia/Jerusalem"},"openwa":{"url":"http://wa.lan","default_chat":"x","api_key":"k"},
+		"debug":{"enabled":false},"logging":{"level":"debug","format":"text"},"history":{"raw_retention":"48h","rollup_retention":"720h"},
+		"notifications":{"quiet_hours":"23:00-07:00","timezone":"Asia/Jerusalem"},
 		"access":{"base_url":"https://atlantis.lan/"}}`, true)
 	if code != 200 {
 		t.Fatalf("%d %v", code, m)
 	}
-	if mm := m["metrics"].(map[string]any); mm["path"] != "/prom" || mm["token_set"] != true || mm["source"] != "ui" || mm["token"] != nil {
+	if mm := m["metrics"].(map[string]any); mm["path"] != "/prom" || mm["token_set"] != true || mm["token"] != nil {
 		t.Fatalf("%v", mm)
 	}
-	if o := m["openwa"].(map[string]any); o["api_key_set"] != true || o["api_key"] != nil {
-		t.Fatalf("%v", o)
+	if l := m["logging"].(map[string]any); l["level"] != "debug" || l["format"] != "text" {
+		t.Fatalf("%v", l)
+	}
+	if _, ok := m["openwa"]; ok {
+		t.Fatal("there are no OpenWA defaults any more; OpenWA is set on its channel")
 	}
 	if a := m["access"].(map[string]any); a["base_url"] != "https://atlantis.lan" {
 		t.Fatalf("%v", a)
@@ -178,7 +181,7 @@ func TestSettingsSectionsApplyAtOnce(t *testing.T) {
 		t.Fatal("an omitted token must keep the saved one")
 	}
 	// All or nothing: one bad section rejects the whole request.
-	code, _, _ = e.do(t, "PUT", "/api/v1/settings", `{"logging":{"level":"error"},"notifications":{"timezone":"Mars/Base"}}`, true)
+	code, _, _ = e.do(t, "PUT", "/api/v1/settings", `{"logging":{"level":"error","format":"json"},"notifications":{"timezone":"Mars/Base"}}`, true)
 	_, m, _ = e.do(t, "GET", "/api/v1/settings", "", false)
 	if code != 400 || m["logging"].(map[string]any)["level"] != "debug" {
 		t.Fatalf("%d %v", code, m["logging"])

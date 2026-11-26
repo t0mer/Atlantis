@@ -7,31 +7,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/t0mer/atlantis/internal/config"
 	"github.com/t0mer/atlantis/internal/events"
 	"github.com/t0mer/atlantis/internal/prefs"
 	"github.com/t0mer/atlantis/internal/site"
 )
 
-// Startup describes the settings fixed when Atlantis starts (shown
-// read-only in Settings).
+// Startup describes what is fixed when Atlantis starts (shown read-only in
+// Settings).
 type Startup struct {
 	Listen    string `json:"listen"`
 	DataPath  string `json:"data_path"`
-	KeySource string `json:"key_source"` // "environment" or the key file's path
-	LogFormat string `json:"log_format"`
+	KeySource string `json:"key_source"` // "environment (...)" or the key file's path
 }
 
-func source(fromUI bool) string {
-	if fromUI {
-		return "ui"
-	}
-	return "config"
-}
-
-// settings reports every setting: the ones edited in the UI, with where
-// each section comes from ("ui" or "config"), and the startup ones.
-// Secrets are never returned, only whether they are set.
+// settings reports every setting and the startup facts. Secrets are never
+// returned, only whether they are set.
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	n, _, err := s.store.GetNetwork(r.Context())
 	if err != nil {
@@ -40,23 +30,18 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	}
 	p := s.Site.Poll()
 	v := s.Prefs.Get()
-	src := func(sec string) string { return source(s.Prefs.FromUI(sec)) }
 	writeJSON(w, http.StatusOK, map[string]any{
-		"deco": map[string]any{"transport": n.Transport, "host": n.Host, "port": n.Port, "email": n.Email},
-		"poll": map[string]any{"fast": p.Fast.String(), "slow": p.Slow.String(), "offline_after_misses": p.OfflineAfterMisses, "source": source(p.FromUI)},
-		"history": map[string]any{"raw_retention": v.History.RawRetention.String(), "rollup_retention": v.History.RollupRetention.String(),
-			"source": src(prefs.History)},
+		"deco":    map[string]any{"transport": n.Transport, "host": n.Host, "port": n.Port, "email": n.Email},
+		"poll":    map[string]any{"fast": p.Fast.String(), "slow": p.Slow.String(), "offline_after_misses": p.OfflineAfterMisses},
+		"history": map[string]any{"raw_retention": v.History.RawRetention.String(), "rollup_retention": v.History.RollupRetention.String()},
 		"metrics": map[string]any{"enabled": v.Metrics.Enabled, "path": v.Metrics.Path, "per_client": v.Metrics.PerClient,
-			"token_set": v.Metrics.Token != "", "source": src(prefs.Metrics)},
-		"notifications": map[string]any{"quiet_hours": v.Notify.QuietHours, "timezone": v.Notify.Timezone, "events": events.All,
-			"source": src(prefs.Notify)},
-		"openwa": map[string]any{"url": v.OpenWA.URL, "default_chat": v.OpenWA.DefaultChat, "api_key_set": v.OpenWA.APIKey != "",
-			"source": src(prefs.OpenWA)},
-		"access":  map[string]any{"base_url": v.Access.BaseURL, "source": src(prefs.Access)},
-		"logging": map[string]any{"level": v.Logging.Level, "source": src(prefs.Logging)},
-		"debug":   map[string]any{"enabled": v.Debug.Enabled, "source": src(prefs.Debug)},
-		"startup": s.Startup,
-		"version": s.Version,
+			"token_set": v.Metrics.Token != ""},
+		"notifications": map[string]any{"quiet_hours": v.Notify.QuietHours, "timezone": v.Notify.Timezone, "events": events.All},
+		"access":        map[string]any{"base_url": v.Access.BaseURL},
+		"logging":       map[string]any{"level": v.Logging.Level, "format": v.Logging.Format},
+		"debug":         map[string]any{"enabled": v.Debug.Enabled},
+		"startup":       s.Startup,
+		"version":       s.Version,
 	})
 }
 
@@ -76,20 +61,10 @@ type settingsBody struct {
 		PerClient string  `json:"per_client"`
 		Token     *string `json:"token"` // absent = keep, "" = clear
 	} `json:"metrics"`
-	Notifications *struct {
-		QuietHours string `json:"quiet_hours"` // "23:00-07:00", "" = none
-		Timezone   string `json:"timezone"`
-	} `json:"notifications"`
-	OpenWA *struct {
-		URL         string  `json:"url"`
-		DefaultChat string  `json:"default_chat"`
-		APIKey      *string `json:"api_key"` // absent = keep, "" = clear
-	} `json:"openwa"`
-	Access  *prefs.AccessPrefs  `json:"access"`
-	Logging *prefs.LoggingPrefs `json:"logging"`
-	Debug   *struct {
-		Enabled bool `json:"enabled"`
-	} `json:"debug"`
+	Notifications *prefs.NotifyPrefs  `json:"notifications"`
+	Access        *prefs.AccessPrefs  `json:"access"`
+	Logging       *prefs.LoggingPrefs `json:"logging"`
+	Debug         *prefs.DebugPrefs   `json:"debug"`
 }
 
 // putSettings changes any of the sections. Everything is checked before
@@ -129,15 +104,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if m := b.Metrics; m != nil {
 		pt.Metrics = &prefs.MetricsPatch{Enabled: m.Enabled, Path: strings.TrimSpace(m.Path), PerClient: m.PerClient, Token: m.Token}
 	}
-	pt.Access, pt.Logging = b.Access, b.Logging
+	pt.Access, pt.Logging, pt.Debug = b.Access, b.Logging, b.Debug
 	if n := b.Notifications; n != nil {
-		pt.Notify = &config.Notify{QuietHours: strings.TrimSpace(n.QuietHours), Timezone: strings.TrimSpace(n.Timezone)}
-	}
-	if d := b.Debug; d != nil {
-		pt.Debug = &config.Debug{Enabled: d.Enabled}
-	}
-	if o := b.OpenWA; o != nil {
-		pt.OpenWA = &prefs.OpenWAPatch{URL: o.URL, DefaultChat: o.DefaultChat, APIKey: o.APIKey}
+		pt.Notify = &prefs.NotifyPrefs{QuietHours: strings.TrimSpace(n.QuietHours), Timezone: strings.TrimSpace(n.Timezone)}
 	}
 	if poll == nil && pt == (prefs.Patch{}) {
 		bad("nothing to change")

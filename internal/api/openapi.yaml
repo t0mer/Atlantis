@@ -152,7 +152,7 @@ components:
         payload: { type: object }
     ChannelConfig:
       type: object
-      description: Write-only. shoutrrr uses url; openwa uses url (base), api_key and chat.
+      description: Write-only. shoutrrr uses url; openwa needs url (the OpenWA address) and chat, and api_key when the server has one.
       properties:
         url: { type: string, writeOnly: true }
         api_key: { type: string, writeOnly: true }
@@ -323,7 +323,7 @@ paths:
       responses: { "200": { description: OK, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Event" } } } } } }
   /api/v1/settings:
     get:
-      summary: All settings. Sections edited in the UI report source ui or config (YAML/environment defaults); secrets are never returned, only token_set / api_key_set. startup lists what is fixed when Atlantis starts.
+      summary: All settings. Secrets are never returned, only token_set. startup lists what is fixed when Atlantis starts.
       responses:
         "200":
           description: OK
@@ -333,16 +333,15 @@ paths:
                 type: object
                 properties:
                   poll: { type: object }
-                  history: { type: object, properties: { raw_retention: { type: string }, rollup_retention: { type: string }, source: { type: string } } }
-                  metrics: { type: object, properties: { enabled: { type: boolean }, path: { type: string }, per_client: { type: string }, token_set: { type: boolean }, source: { type: string } } }
-                  notifications: { type: object, properties: { quiet_hours: { type: string }, timezone: { type: string }, events: { type: array, items: { type: string } }, source: { type: string } } }
-                  openwa: { type: object, properties: { url: { type: string }, default_chat: { type: string }, api_key_set: { type: boolean }, source: { type: string } } }
-                  access: { type: object, properties: { base_url: { type: string }, source: { type: string } } }
-                  logging: { type: object, properties: { level: { type: string }, source: { type: string } } }
-                  debug: { type: object, properties: { enabled: { type: boolean }, source: { type: string } } }
-                  startup: { type: object, properties: { listen: { type: string }, data_path: { type: string }, key_source: { type: string }, log_format: { type: string } } }
+                  history: { type: object, properties: { raw_retention: { type: string }, rollup_retention: { type: string } } }
+                  metrics: { type: object, properties: { enabled: { type: boolean }, path: { type: string }, per_client: { type: string }, token_set: { type: boolean } } }
+                  notifications: { type: object, properties: { quiet_hours: { type: string }, timezone: { type: string }, events: { type: array, items: { type: string } } } }
+                  access: { type: object, properties: { base_url: { type: string } } }
+                  logging: { type: object, properties: { level: { type: string }, format: { type: string } } }
+                  debug: { type: object, properties: { enabled: { type: boolean } } }
+                  startup: { type: object, properties: { listen: { type: string }, data_path: { type: string }, key_source: { type: string } } }
     put:
-      summary: Change any sections; they apply at once and override the configuration. All sections are checked before any is saved.
+      summary: Change any sections; they are saved and apply at once. All sections are checked before any is saved.
       security: [ { session: [], csrf: [] } ]
       requestBody:
         required: true
@@ -374,14 +373,8 @@ paths:
                   properties:
                     quiet_hours: { type: string, example: "23:00-07:00", description: Empty for none }
                     timezone: { type: string, example: Asia/Jerusalem }
-                openwa:
-                  type: object
-                  properties:
-                    url: { type: string }
-                    default_chat: { type: string }
-                    api_key: { type: string, writeOnly: true, description: "Omit to keep, empty to clear" }
                 access: { type: object, properties: { base_url: { type: string, description: "Public URL; https:// marks the session cookie Secure" } } }
-                logging: { type: object, properties: { level: { type: string, enum: [debug, info, warn, error] } } }
+                logging: { type: object, description: An omitted field keeps its value, properties: { level: { type: string, enum: [debug, info, warn, error] }, format: { type: string, enum: [json, text] } } }
                 debug: { type: object, properties: { enabled: { type: boolean, description: Enables GET /api/v1/debug/raw } } }
       responses: { "200": { description: The settings now in effect }, "400": { description: Invalid; nothing was saved } }
   /api/v1/channels:

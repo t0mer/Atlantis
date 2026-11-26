@@ -19,7 +19,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/t0mer/atlantis/internal/config"
 	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
@@ -31,7 +30,6 @@ import (
 
 // Deps are the server's collaborators.
 type Deps struct {
-	Config  *config.Config
 	Store   *store.Store
 	Site    *site.Site // the Deco connection; may have nothing running
 	Hub     *poller.Hub
