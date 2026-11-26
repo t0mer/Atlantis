@@ -1,5 +1,6 @@
 // Package secret encrypts stored credentials (the Deco password, channel
-// URLs and tokens) with AES-256-GCM under ATLANTIS_SECRET_KEY.
+// URLs and tokens) with AES-256-GCM under ATLANTIS_SECRET_KEY, or under a
+// key file created next to the database on first start.
 package secret
 
 import (
@@ -9,6 +10,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -83,4 +87,96 @@ func (b *Box) Open(sealed string) (string, error) {
 		return "", ErrBadSecret
 	}
 	return string(pt), nil
+}
+
+// KeyFileName is the key file kept next to the database when
+// ATLANTIS_SECRET_KEY is not set.
+const KeyFileName = "secret.key"
+
+// ErrNoKeyFile means the key file is missing but may not be created
+// (the database already holds data sealed with some other key).
+var ErrNoKeyFile = errors.New("secret: the key file is missing")
+
+// LoadKeyFile reads the key at path. If the file does not exist and create
+// is true, it writes a new random key there (owner-only, created
+// exclusively so two starts never race) and reports created.
+func LoadKeyFile(path string, create bool) (key string, created bool, err error) {
+	b, err := os.ReadFile(path)
+	if err == nil {
+		key = strings.TrimSpace(string(b))
+		if _, err := New(key); err != nil {
+			return "", false, fmt.Errorf("%s: %w", path, err)
+		}
+		return key, false, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", false, err
+	}
+	if !create {
+		return "", false, fmt.Errorf("%w: %s", ErrNoKeyFile, path)
+	}
+	key = NewKey()
+	// Write a temporary file, flush it, then link it into place: the link
+	// fails if another start got there first (its key is then used), and a
+	// reader never sees a half-written key. The directory is flushed too,
+	// so the key survives a power cut as durably as the database does.
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".secret.key.*")
+	if err != nil {
+		return "", false, err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // best effort: gone once linked
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return "", false, err
+	}
+	if _, err := f.WriteString(key + "\n"); err != nil {
+		f.Close()
+		return "", false, err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return "", false, err
+	}
+	if err := f.Close(); err != nil {
+		return "", false, err
+	}
+	if err := os.Link(tmp, path); err != nil {
+		if errors.Is(err, fs.ErrExist) { // another start won: use its key
+			return LoadKeyFile(path, false)
+		}
+		// No hard links here (some network shares, FUSE, FAT): create the
+		// file exclusively instead.
+		if err := writeExclusive(path, key); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				return LoadKeyFile(path, false)
+			}
+			return "", false, err
+		}
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return key, true, nil
+}
+
+// writeExclusive creates path (failing if it exists) with the key, flushed.
+func writeExclusive(path, key string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(key + "\n")
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(path) // best effort: never leave a half-written key
+	}
+	return err
 }

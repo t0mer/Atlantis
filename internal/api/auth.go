@@ -169,7 +169,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u store.Us
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: tok, Path: "/", Expires: exp,
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.secureCookies,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.secureCookies(r),
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"user": u.Username, "csrf_token": csrf})
 }
@@ -178,7 +178,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(cookieName); err == nil {
 		_ = s.store.DeleteSession(r.Context(), hashToken(c.Value))
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.secureCookies})
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.secureCookies(r)})
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -455,67 +455,6 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ev)
 }
 
-// settings shows the effective, non-secret configuration. Changing it is
-// done in the YAML file or environment for now.
-func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
-	c := s.Config
-	n, _, err := s.store.GetNetwork(r.Context())
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	p := s.Site.Poll()
-	source := "config"
-	if p.FromUI {
-		source = "ui"
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"deco":    map[string]any{"transport": n.Transport, "host": n.Host, "port": n.Port, "email": n.Email},
-		"poll":    map[string]any{"fast": p.Fast.String(), "slow": p.Slow.String(), "offline_after_misses": p.OfflineAfterMisses, "source": source},
-		"store":   map[string]any{"raw_retention": c.Store.RawRetention.String(), "rollup_retention": c.Store.RollupRetention.String()},
-		"metrics": map[string]any{"enabled": c.Metrics.Enabled, "path": c.Metrics.Path, "per_client": c.Metrics.PerClient},
-		"notify":  map[string]any{"quiet_hours": c.Notify.QuietHours, "timezone": c.Notify.Timezone, "events": events.All},
-		"version": s.Version,
-	})
-}
-
-// putSettings changes the refresh intervals. Other settings stay in the
-// YAML file and environment.
-func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Poll *struct {
-			Fast               string `json:"fast"`
-			Slow               string `json:"slow"`
-			OfflineAfterMisses int    `json:"offline_after_misses"`
-		} `json:"poll"`
-	}
-	if !readJSON(w, r, &body) {
-		return
-	}
-	if body.Poll == nil {
-		writeError(w, http.StatusBadRequest, "nothing to change: send poll")
-		return
-	}
-	fast, err1 := time.ParseDuration(body.Poll.Fast)
-	slow, err2 := time.ParseDuration(body.Poll.Slow)
-	if err1 != nil || err2 != nil {
-		writeError(w, http.StatusBadRequest, `intervals are durations such as "30s" or "5m"`)
-		return
-	}
-	p := site.Poll{Fast: fast, Slow: slow, OfflineAfterMisses: body.Poll.OfflineAfterMisses}
-	err := s.Site.SetPoll(r.Context(), p)
-	s.audit(r.Context(), userFrom(r.Context()), "settings.poll", fmt.Sprintf("fast=%s slow=%s offline_after=%d", fast, slow, p.OfflineAfterMisses), err)
-	if errors.Is(err, site.ErrInvalid) {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.settings(w, r)
-}
-
 // channelView never includes the sealed config; secrets are write-only.
 type channelView struct {
 	ID          int64    `json:"id"`
@@ -600,6 +539,18 @@ func (s *Server) buildChannel(b channelBody, cur store.Channel) (store.Channel, 
 	}
 	if c.ConfigEnc == "" {
 		return c, errors.New("config is required")
+	}
+	// A new or changed config must be able to send: an OpenWA channel
+	// needs its own address and chat (there are no defaults to fall back
+	// on). Toggling or renaming a channel leaves its config alone.
+	if b.Config != nil || c.Kind != cur.Kind {
+		cfg, err := s.Notify.OpenConfig(c)
+		if err != nil {
+			return c, err
+		}
+		if _, err := notify.NewSender(c.Kind, cfg); err != nil {
+			return c, err
+		}
 	}
 	return c, nil
 }
@@ -833,6 +784,10 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 
 // debugRaw returns a redacted raw reply (only when debug.enabled).
 func (s *Server) debugRaw(w http.ResponseWriter, r *http.Request) {
+	if !s.Prefs.Get().Debug.Enabled {
+		writeError(w, http.StatusNotFound, "the debug endpoint is off (Settings, Advanced)")
+		return
+	}
 	area, form := r.URL.Query().Get("area"), r.URL.Query().Get("form")
 	var raw json.RawMessage
 	err := runOf(r.Context()).Session.Do(r.Context(), func(ctx context.Context, c deco.Client) error {

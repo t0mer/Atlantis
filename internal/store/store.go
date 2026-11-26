@@ -231,3 +231,27 @@ func (s *Store) SetNetworkName(ctx context.Context, networkID int64, name string
 	_, err := s.db.ExecContext(ctx, `UPDATE networks SET name=? WHERE id=?`, name, networkID)
 	return err
 }
+
+// HasSealed reports whether anything in the database is encrypted with the
+// secret key (the Deco password, channel configs, sealed settings), so a
+// missing key would make it unreadable.
+func (s *Store) HasSealed(ctx context.Context) (bool, error) {
+	v, err := s.SealedSample(ctx)
+	return v != "", err
+}
+
+// SealedSample returns one value sealed with the secret key, or "" if there
+// is none; opening it tells whether a key is the right one.
+func (s *Store) SealedSample(ctx context.Context) (string, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT v FROM (
+		SELECT password_enc AS v FROM networks WHERE password_enc != ''
+		UNION ALL SELECT config_enc FROM channels WHERE config_enc != ''
+		UNION ALL SELECT json_extract(value_json, '$.token') FROM settings WHERE value_json GLOB '*"token":"v1:*'
+		UNION ALL SELECT json_extract(value_json, '$.api_key') FROM settings WHERE value_json GLOB '*"api_key":"v1:*'
+	) LIMIT 1`).Scan(&v)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}

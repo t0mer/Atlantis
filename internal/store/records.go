@@ -225,6 +225,31 @@ func (s *Store) SetSetting(ctx context.Context, key string, v any) error {
 	return err
 }
 
+// DeleteSetting removes a setting; a missing one is not an error.
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE key=?`, key)
+	return err
+}
+
+// SetSettings saves several settings in one transaction: all or none.
+func (s *Store) SetSettings(ctx context.Context, values map[string]any) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for k, v := range values {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO settings (key, value_json) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value_json=excluded.value_json`, k, string(b)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // User is a local account.
 type User struct {
 	ID           int64

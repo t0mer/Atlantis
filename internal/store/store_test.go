@@ -245,3 +245,23 @@ func TestAddAndRemoveNetwork(t *testing.T) {
 		t.Error("settings are not per site and must stay")
 	}
 }
+
+func TestHasSealed(t *testing.T) {
+	s, _ := open(t)
+	ctx := context.Background()
+	if ok, err := s.HasSealed(ctx); ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	s.SaveNetwork(ctx, Network{Host: "h", Transport: "ssh"})
+	if ok, _ := s.HasSealed(ctx); ok {
+		t.Fatal("a Deco without a password holds nothing sealed")
+	}
+	s.SetSetting(ctx, "openwa", map[string]string{"default_chat": "V1:chat", "api_key": ""})
+	if ok, _ := s.HasSealed(ctx); ok {
+		t.Fatal("a plain value that looks like a prefix must not count")
+	}
+	s.SetSetting(ctx, "metrics", map[string]string{"token": "v1:abc"})
+	if v, _ := s.SealedSample(ctx); v != "v1:abc" {
+		t.Fatalf("a sealed setting must count: %q", v)
+	}
+}

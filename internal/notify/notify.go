@@ -15,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -177,7 +178,7 @@ func NewSender(kind string, c Config) (Sender, error) {
 		return shoutrrrSender{url: c.URL}, nil
 	case KindOpenWA:
 		if c.URL == "" || c.Chat == "" {
-			return nil, errors.New("openwa: base URL and chat are required")
+			return nil, errors.New("openwa: the OpenWA address and the chat are required")
 		}
 		return openWASender{cfg: c, http: &http.Client{Timeout: 15 * time.Second}}, nil
 	}
@@ -186,16 +187,18 @@ func NewSender(kind string, c Config) (Sender, error) {
 
 // Dispatcher routes events to the enabled channels.
 type Dispatcher struct {
-	store    *store.Store
-	box      *secret.Box
-	defaults config.OpenWA
-	quiet    [2]int // minutes after midnight; equal = no quiet hours
-	loc      *time.Location
-	site     func() string
-	log      *slog.Logger
-	queue    chan job
-	now      func() time.Time
-	newSend  func(kind string, c Config) (Sender, error)
+	store *store.Store
+	box   *secret.Box
+
+	mu    sync.RWMutex // guards the settings below (changed from the UI)
+	quiet [2]int       // minutes after midnight; equal = no quiet hours
+	loc   *time.Location
+
+	site    func() string
+	log     *slog.Logger
+	queue   chan job
+	now     func() time.Time
+	newSend func(kind string, c Config) (Sender, error)
 }
 
 type job struct {
@@ -203,19 +206,28 @@ type job struct {
 	watched bool
 }
 
-// New returns a dispatcher; call Run to start delivering.
-func New(st *store.Store, box *secret.Box, cfg *config.Config, site func() string, log *slog.Logger) *Dispatcher {
-	d := &Dispatcher{store: st, box: box, defaults: cfg.OpenWA, site: site, log: log,
+// New returns a dispatcher (UTC, no quiet hours until SetPrefs); call Run
+// to start delivering.
+func New(st *store.Store, box *secret.Box, site func() string, log *slog.Logger) *Dispatcher {
+	return &Dispatcher{store: st, box: box, site: site, log: log, loc: time.UTC,
 		queue: make(chan job, 256), now: time.Now, newSend: NewSender}
-	d.loc, _ = time.LoadLocation(cfg.Notify.Timezone)
-	if d.loc == nil {
-		d.loc = time.UTC
+}
+
+// SetPrefs applies quiet hours ("HH:MM-HH:MM", "" for none) and the time
+// zone; the next notification uses them. Values are validated by the caller.
+func (d *Dispatcher) SetPrefs(quietHours, timezone string) {
+	loc, _ := time.LoadLocation(timezone)
+	if loc == nil {
+		loc = time.UTC
 	}
-	if cfg.Notify.QuietHours != "" {
-		s, e, _ := config.ParseQuietHours(cfg.Notify.QuietHours)
-		d.quiet = [2]int{s, e}
+	var quiet [2]int
+	if quietHours != "" {
+		s, e, _ := config.ParseQuietHours(quietHours)
+		quiet = [2]int{s, e}
 	}
-	return d
+	d.mu.Lock()
+	d.loc, d.quiet = loc, quiet
+	d.mu.Unlock()
 }
 
 // Run delivers queued events until ctx is done.
@@ -244,11 +256,13 @@ func (d *Dispatcher) Notify(e store.Event, name string, watched bool) {
 }
 
 func (d *Dispatcher) inQuietHours(t time.Time) bool {
-	s, e := d.quiet[0], d.quiet[1]
+	d.mu.RLock()
+	s, e, loc := d.quiet[0], d.quiet[1], d.loc
+	d.mu.RUnlock()
 	if s == e {
 		return false
 	}
-	lt := t.In(d.loc)
+	lt := t.In(loc)
 	m := lt.Hour()*60 + lt.Minute()
 	if s < e {
 		return m >= s && m < e
@@ -278,7 +292,7 @@ func (d *Dispatcher) deliver(ctx context.Context, j job) {
 	}
 }
 
-// OpenConfig decrypts a channel's config, filling OpenWA defaults.
+// OpenConfig decrypts a channel's config.
 func (d *Dispatcher) OpenConfig(ch store.Channel) (Config, error) {
 	raw, err := d.box.Open(ch.ConfigEnc)
 	if err != nil {
@@ -288,18 +302,51 @@ func (d *Dispatcher) OpenConfig(ch store.Channel) (Config, error) {
 	if err := json.Unmarshal([]byte(raw), &c); err != nil {
 		return Config{}, fmt.Errorf("channel config: %w", err)
 	}
-	if ch.Kind == KindOpenWA {
+	return c, nil
+}
+
+// FillOpenWA copies def into the empty fields of every OpenWA channel. It
+// moves the OpenWA defaults earlier versions had into the channels that
+// relied on them. A channel that can't be read or saved is logged and
+// skipped. It returns how many channels changed.
+func (d *Dispatcher) FillOpenWA(ctx context.Context, def Config) (int, error) {
+	chs, err := d.store.Channels(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, ch := range chs {
+		if ch.Kind != KindOpenWA {
+			continue
+		}
+		c, err := d.OpenConfig(ch)
+		if err != nil {
+			d.log.Warn("skipping a WhatsApp channel whose settings can't be read", "channel", ch.Name, "err", err)
+			continue
+		}
+		was := c
 		if c.URL == "" {
-			c.URL = d.defaults.URL
+			c.URL = def.URL
 		}
 		if c.APIKey == "" {
-			c.APIKey = d.defaults.APIKey
+			c.APIKey = def.APIKey
 		}
 		if c.Chat == "" {
-			c.Chat = d.defaults.DefaultChat
+			c.Chat = def.Chat
 		}
+		if c == was {
+			continue
+		}
+		if ch.ConfigEnc, err = d.SealConfig(c); err != nil {
+			return n, err
+		}
+		if _, err := d.store.SaveChannel(ctx, ch); err != nil {
+			d.log.Warn("could not save a WhatsApp channel", "channel", ch.Name, "err", err)
+			continue
+		}
+		n++
 	}
-	return c, nil
+	return n, nil
 }
 
 // SealConfig encrypts a channel config for storage.

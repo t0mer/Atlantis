@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/t0mer/atlantis/internal/config"
 	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/poller"
 	"github.com/t0mer/atlantis/internal/secret"
@@ -80,9 +79,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	box, _ := secret.New(secret.NewKey())
 	h := &harness{st: st, box: box, client: &fakeClient{}, disc: &Discovery{Model: "M5", Role: "master", Port: 20001}}
-	cfg := &config.Config{Poll: config.Poll{Fast: time.Hour, Slow: time.Hour, OfflineAfterMisses: 2},
-		Store: config.Store{RawRetention: time.Hour, RollupRetention: 2 * time.Hour}}
-	h.s = New(ctx, Deps{Config: cfg, Store: st, Box: box, Hub: poller.NewHub(), Notify: noNotify{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	h.s = New(ctx, Deps{Poll: Poll{Fast: time.Hour, Slow: time.Hour, OfflineAfterMisses: 2}, Store: st, Box: box, Hub: poller.NewHub(), Notify: noNotify{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Build: func(_ context.Context, n store.Network, _ string, _ *HostKeys, _ func(string), _ *slog.Logger) (deco.Client, *Discovery, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()

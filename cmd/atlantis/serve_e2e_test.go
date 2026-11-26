@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/t0mer/atlantis/internal/config"
 	"github.com/t0mer/atlantis/internal/deco/tmp/sshconn/fakessh"
 	"github.com/t0mer/atlantis/internal/secret"
+	"github.com/t0mer/atlantis/internal/store"
 )
 
 func freePort(t *testing.T) int {
@@ -38,19 +38,21 @@ func TestServeEndToEnd(t *testing.T) {
 	host, sshPort := srv.Addr()
 	port := freePort(t)
 	var logs strings.Builder
-	cfg := &config.Config{
-		Server:    config.Server{Listen: "127.0.0.1:" + strconv.Itoa(port)},
-		Deco:      config.Deco{Transport: "ssh", Host: host, Port: sshPort, Email: "Owner@Example.com", Password: "decopass"},
-		Poll:      config.Poll{Fast: time.Minute, Slow: time.Minute, OfflineAfterMisses: 2},
-		Store:     config.Store{Path: filepath.Join(t.TempDir(), "a.db"), RawRetention: time.Hour, RollupRetention: 2 * time.Hour},
-		Metrics:   config.Metrics{Enabled: true, Path: "/metrics", PerClient: "watched"},
-		Notify:    config.Notify{Timezone: "UTC"},
-		Log:       config.Log{Level: "info", Format: "json"},
-		SecretKey: secret.NewKey(),
-	}
+	cfg := &config.Config{Listen: "127.0.0.1:" + strconv.Itoa(port), StorePath: filepath.Join(t.TempDir(), "a.db"), SecretKey: secret.NewKey()}
+	// The Deco as the Connect page would have stored it.
 	ctx, cancel := context.WithCancel(context.Background())
+	box, _ := secret.New(cfg.SecretKey)
+	sealed, _ := box.Seal("decopass")
+	db, err := store.Open(ctx, cfg.StorePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SaveNetwork(ctx, store.Network{Host: host, Port: sshPort, Transport: "ssh", Email: "Owner@Example.com", PasswordEnc: sealed}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, cfg, newLogger(cfg.Log, &logs)) }()
+	go func() { done <- serve(ctx, cfg, newLogger(&logs)) }()
 	defer func() {
 		cancel()
 		if err := <-done; err != nil {
@@ -117,7 +119,7 @@ func TestServeEndToEnd(t *testing.T) {
 
 func TestLoggerRedactsSecrets(t *testing.T) {
 	var b strings.Builder
-	l := newLogger(config.Log{Level: "info", Format: "json"}, &b)
+	l := newLogger(&b)
 	l.Info("x", "password", "hunter2", "api_key", "k", "token", "t", "host", "192.0.2.1")
 	out := b.String()
 	if strings.Contains(out, "hunter2") || strings.Contains(out, `"k"`) || !strings.Contains(out, "192.0.2.1") {
@@ -125,15 +127,20 @@ func TestLoggerRedactsSecrets(t *testing.T) {
 	}
 }
 
-// Review finding: the healthcheck must follow server.listen from the YAML.
-func TestHealthListenFromYAML(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "a.yaml")
-	os.WriteFile(p, []byte("server:\n  listen: \":9090\"\n"), 0o600)
-	t.Setenv("ATLANTIS_SERVER_LISTEN", "")
-	if got := healthListen(p); got != ":9090" {
-		t.Fatalf("got %q", got)
-	}
-	if got := healthListen(""); got != ":8080" {
-		t.Fatalf("default %q", got)
+// Settings switch the log format and level of loggers already made,
+// including ones with attributes.
+func TestLoggingFollowsSettings(t *testing.T) {
+	defer setLogging("info", "json")
+	var b strings.Builder
+	l := newLogger(&b).With("part", "poller")
+	setLogging("info", "json")
+	l.Info("one", "token", "t1")
+	setLogging("warn", "text")
+	l.Info("hidden")
+	l.Warn("two", "token", "t2")
+	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], `{"time"`) || !strings.Contains(lines[0], `"part":"poller"`) ||
+		!strings.HasPrefix(lines[1], "time=") || !strings.Contains(lines[1], "part=poller") || strings.Contains(b.String(), "t2") {
+		t.Fatalf("%q", lines)
 	}
 }

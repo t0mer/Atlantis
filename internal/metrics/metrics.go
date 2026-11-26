@@ -5,6 +5,7 @@ package metrics
 
 import (
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -17,7 +18,7 @@ import (
 // Metrics holds the collectors on a private registry.
 type Metrics struct {
 	reg       *prometheus.Registry
-	perClient string // all, watched, none
+	perClient atomic.Value // string: all, watched, none
 
 	nodeUp, clients, clientUp, clientRx, clientTx *prometheus.GaugeVec
 	cpu, mem, wanUp                               prometheus.Gauge
@@ -25,9 +26,14 @@ type Metrics struct {
 	pollErrors, logins                            *prometheus.CounterVec
 }
 
+// SetPerClient changes which clients get their own series (all, watched or
+// none); it applies from the next poll.
+func (m *Metrics) SetPerClient(perClient string) { m.perClient.Store(perClient) }
+
 // New registers the collectors. perClient is all, watched or none.
 func New(perClient string) *Metrics {
-	m := &Metrics{reg: prometheus.NewRegistry(), perClient: perClient}
+	m := &Metrics{reg: prometheus.NewRegistry()}
+	m.SetPerClient(perClient)
 	g := func(name, help string, labels ...string) *prometheus.GaugeVec {
 		v := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: name, Help: help}, labels)
 		m.reg.MustRegister(v)
@@ -83,6 +89,7 @@ func (m *Metrics) Clients(list []Client) {
 	m.clientUp.Reset()
 	m.clientRx.Reset()
 	m.clientTx.Reset()
+	pc, _ := m.perClient.Load().(string)
 	for _, c := range list {
 		if c.Online {
 			band := c.Band
@@ -91,7 +98,7 @@ func (m *Metrics) Clients(list []Client) {
 			}
 			m.clients.WithLabelValues(c.NodeID, band, c.Network).Inc()
 		}
-		if m.perClient == "none" || (m.perClient == "watched" && !c.Watch) {
+		if pc == "none" || (pc == "watched" && !c.Watch) {
 			continue
 		}
 		m.clientUp.WithLabelValues(c.MAC, c.DisplayName).Set(b(c.Online))

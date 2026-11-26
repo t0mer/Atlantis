@@ -10,13 +10,15 @@ import (
 )
 
 // Poll are the refresh intervals. Values saved from the UI (settings key
-// "poll") override the configuration.
+// "poll") replace DefaultPoll.
 type Poll struct {
 	Fast               time.Duration `json:"fast"`
 	Slow               time.Duration `json:"slow"`
 	OfflineAfterMisses int           `json:"offline_after_misses"`
-	FromUI             bool          `json:"-"`
 }
+
+// DefaultPoll applies until refresh intervals are saved.
+var DefaultPoll = Poll{Fast: 30 * time.Second, Slow: 5 * time.Minute, OfflineAfterMisses: 2}
 
 const pollKey = "poll"
 
@@ -56,7 +58,6 @@ func (s *Site) LoadPoll(ctx context.Context) error {
 		s.d.Log.Warn("ignoring saved refresh intervals", "err", err)
 		return nil
 	}
-	p.FromUI = true
 	s.mu.Lock()
 	s.poll = p
 	s.mu.Unlock()
@@ -69,7 +70,6 @@ func (s *Site) SetPoll(ctx context.Context, p Poll) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
-	p.FromUI = true
 	s.pollMu.Lock() // what is stored and what runs stay the same
 	defer s.pollMu.Unlock()
 	if err := s.d.Store.SetSetting(ctx, pollKey, p); err != nil {

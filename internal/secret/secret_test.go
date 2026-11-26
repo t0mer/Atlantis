@@ -2,6 +2,8 @@ package secret
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -44,5 +46,30 @@ func TestKeyValidation(t *testing.T) {
 		if _, err := New(k); err == nil {
 			t.Errorf("accepted key %q", k)
 		}
+	}
+}
+
+func TestKeyFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), KeyFileName)
+	if _, _, err := LoadKeyFile(p, false); !errors.Is(err, ErrNoKeyFile) {
+		t.Fatalf("missing file without create: %v", err)
+	}
+	k, created, err := LoadKeyFile(p, true)
+	if err != nil || !created {
+		t.Fatal(err, created)
+	}
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v", fi.Mode().Perm())
+	}
+	k2, created, err := LoadKeyFile(p, true)
+	if err != nil || created || k2 != k {
+		t.Fatal("the existing key must be reused", err, created)
+	}
+	if _, err := New(k); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(p, []byte("not a key"), 0o600)
+	if _, _, err := LoadKeyFile(p, true); err == nil {
+		t.Fatal("a broken key file must not be replaced or accepted")
 	}
 }

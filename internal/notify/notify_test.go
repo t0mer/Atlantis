@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/t0mer/atlantis/internal/config"
 	"github.com/t0mer/atlantis/internal/secret"
 	"github.com/t0mer/atlantis/internal/store"
 )
@@ -39,8 +38,8 @@ func setup(t *testing.T, quiet string) (*Dispatcher, *store.Store, *recorder, *t
 	}
 	t.Cleanup(func() { st.Close() })
 	box, _ := secret.New(secret.NewKey())
-	cfg := &config.Config{Notify: config.Notify{Timezone: "Asia/Jerusalem", QuietHours: quiet}}
-	d := New(st, box, cfg, func() string { return "Home" }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := New(st, box, func() string { return "Home" }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d.SetPrefs(quiet, "Asia/Jerusalem")
 	rec := &recorder{}
 	d.newSend = func(string, Config) (Sender, error) { return rec, nil }
 	now := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC) // 12:00 in Jerusalem
@@ -188,5 +187,73 @@ func TestShoutrrrSendHonoursContext(t *testing.T) {
 	err := s.Send(ctx, "hi")
 	if err == nil || time.Since(start) > 3*time.Second || strings.Contains(err.Error(), "SUPERSECRET123") {
 		t.Fatalf("%v after %s", err, time.Since(start))
+	}
+}
+
+func TestSetPrefsAppliesAtOnce(t *testing.T) {
+	d, _, _, now := setup(t, "")
+	if d.inQuietHours(*now) {
+		t.Fatal("no quiet hours yet")
+	}
+	d.SetPrefs("11:00-13:00", "Asia/Jerusalem")
+	if !d.inQuietHours(*now) { // 12:00 in Jerusalem
+		t.Fatal("new quiet hours must apply to the next notification")
+	}
+}
+
+// An OpenWA channel sends only with its own address and chat.
+func TestOpenWAChannelNeedsAddressAndChat(t *testing.T) {
+	d, _, _, _ := setup(t, "")
+	c, err := d.OpenConfig(store.Channel{Kind: KindOpenWA, ConfigEnc: mustSeal(t, d, Config{URL: "http://wa.lan"})})
+	if err != nil || c.URL != "http://wa.lan" || c.Chat != "" {
+		t.Fatalf("the config must come back as saved, with nothing filled in: %+v %v", c, err)
+	}
+	if _, err := NewSender(KindOpenWA, c); err == nil {
+		t.Fatal("an OpenWA channel without a chat must not build")
+	}
+	if _, err := NewSender(KindOpenWA, Config{URL: "http://wa.lan", Chat: "123@c.us"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustSeal(t *testing.T, d *Dispatcher, c Config) string {
+	t.Helper()
+	s, err := d.SealConfig(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// The old OpenWA defaults fill only the fields a channel left empty.
+func TestFillOpenWA(t *testing.T) {
+	d, st, _, _ := setup(t, "")
+	ctx := context.Background()
+	save := func(name string, c Config) {
+		if _, err := st.SaveChannel(ctx, store.Channel{Kind: KindOpenWA, Name: name, ConfigEnc: mustSeal(t, d, c), Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("empty", Config{})
+	save("own chat", Config{Chat: "mine"})
+	save("complete", Config{URL: "http://own", Chat: "c", APIKey: "k"})
+	st.SaveChannel(ctx, store.Channel{Kind: KindOpenWA, Name: "damaged", ConfigEnc: "v1:not-sealed"}) // skipped, not fatal
+	n, err := d.FillOpenWA(ctx, Config{URL: "http://wa.lan", Chat: "group", APIKey: "key"})
+	if err != nil || n != 2 {
+		t.Fatal(n, err)
+	}
+	chs, _ := st.Channels(ctx)
+	want := map[string]Config{
+		"empty":    {URL: "http://wa.lan", Chat: "group", APIKey: "key"},
+		"own chat": {URL: "http://wa.lan", Chat: "mine", APIKey: "key"},
+		"complete": {URL: "http://own", Chat: "c", APIKey: "k"},
+	}
+	for _, ch := range chs {
+		if ch.Name == "damaged" {
+			continue
+		}
+		if c, _ := d.OpenConfig(ch); c != want[ch.Name] {
+			t.Errorf("%s: %+v", ch.Name, c)
+		}
 	}
 }

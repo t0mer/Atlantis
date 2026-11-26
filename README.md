@@ -39,6 +39,7 @@ It is a single Go binary with the web UI built in. It runs on a Raspberry Pi, a 
 - **Decos.** Model, firmware (with a notice when an update is available), IP and MAC, role, backhaul, and the devices connected to each one.
 - **Connect from the browser.** Atlantis starts without a Deco. Add the main Deco's address and your TP-Link ID on the first page, and change or remove it later in Settings. Atlantis signs in to check the details before it saves them.
 - **Wi-Fi.** Every band and network with its name, security and state. Turn the guest and IoT networks on or off and change their name and password (and the guest network's security). Change the main network's name and password on all bands, after typing `CHANGE` to confirm. Only changes that have been tested on a real Deco are offered (see [Wi-Fi changes](#wi-fi-changes)).
+- **Configured in the browser.** No configuration file or environment variables are needed: start the container or binary, then set everything in Settings. The key that encrypts stored passwords is created on first start.
 - **Refresh times you set.** Choose how often devices and the mesh are checked in Settings; the change applies at once.
 - **Events.** A timeline of devices joining, coming and going, Decos going offline, internet outages, public IP changes and firmware updates.
 - **Notifications** through [Shoutrrr](https://containrrr.dev/shoutrrr/) (Telegram, Discord, Slack, ntfy, email and more) or WhatsApp through [OpenWA](https://github.com/open-wa/wa-automate-nodejs). Each channel picks which events it sends and can be limited to watched devices. Messages use templates, and there are quiet hours.
@@ -151,37 +152,21 @@ Newer models and firmware may accept only TP-Link's newer encrypted connection (
 
 ## Installation
 
-Atlantis needs a secret key that encrypts the Deco password and the notification credentials stored in its database. Generate one once and keep it: without the same key, stored credentials can't be decrypted.
-
-```sh
-docker run --rm techblog/atlantis keygen
-```
-
-### Docker Compose
-
-Save [`docker-compose.yml`](docker-compose.yml) and put the secret key in a `.env` file next to it:
-
-```sh
-ATLANTIS_SECRET_KEY=<output of keygen>
-```
-
-```sh
-docker compose up -d
-```
-
-Open `http://<host>:8080` and create the admin account. That account is for Atlantis itself and is not your TP-Link ID. Atlantis then asks for the main Deco's address and your TP-Link ID.
-
-You can also set the Deco in the environment instead (`ATLANTIS_DECO_HOST`, `ATLANTIS_DECO_EMAIL` and `ATLANTIS_DECO_PASSWORD`); they are used on the first start only, and the compose file shows them commented out.
+Atlantis needs no configuration file and no environment variables: everything is set in the browser. It keeps its database, `atlantis.db`, and the key that encrypts the stored passwords, `secret.key`, in its data directory (`/data` in the image, the working directory for the binary). The key file is created on first start. Back up the two together: without the key, the stored passwords can't be read.
 
 ### Docker
 
 ```sh
-docker run -d --name atlantis -p 8080:8080 -v atlantis-data:/data \
-  -e ATLANTIS_SECRET_KEY=... \
-  --restart unless-stopped techblog/atlantis:latest
+docker run -d --name atlantis -p 8080:8080 -v atlantis-data:/data --restart unless-stopped techblog/atlantis
 ```
 
-The image (`linux/amd64`, `linux/arm64`, `linux/arm/v7`) is built from scratch: no shell, a non-root user (UID 65532), the database on the `/data` volume, and a health check that runs `atlantis healthcheck`.
+### Docker Compose
+
+Save [`docker-compose.yml`](docker-compose.yml) and run:
+
+```sh
+docker compose up -d
+```
 
 ### Binary
 
@@ -189,9 +174,14 @@ Download the archive for your platform from [Releases](https://github.com/t0mer/
 
 ```sh
 tar xzf atlantis_*_linux_arm64.tar.gz
-export ATLANTIS_SECRET_KEY="$(./atlantis keygen)"   # store this somewhere safe
-ATLANTIS_STORE_PATH=./atlantis.db ./atlantis serve
+./atlantis serve
 ```
+
+It creates `atlantis.db` and `secret.key` in the current directory.
+
+Then open `http://<host>:8080`, create the admin account (for Atlantis itself, not your TP-Link ID), and connect the main Deco.
+
+The image (`linux/amd64`, `linux/arm64`, `linux/arm/v7`) is built from scratch: no shell, a non-root user (UID 65532), the data on the `/data` volume, and a health check that runs `atlantis healthcheck`.
 
 ### From source
 
@@ -204,66 +194,34 @@ make web build        # builds the UI, then bin/atlantis with the UI built in
 
 ## Configuration
 
-Settings come from environment variables, an optional YAML file, and built-in defaults. **Environment variables win over the YAML file.** The YAML file is passed with `atlantis serve --config atlantis.yaml` or `ATLANTIS_CONFIG`. Each environment variable is `ATLANTIS_` followed by the key in capitals, with dots replaced by underscores. For example, `deco.host` becomes `ATLANTIS_DECO_HOST`.
+Everything is set in **Settings**, and saved in the database:
 
-The Deco is usually added in the browser, and its settings are then kept in the database (the password encrypted). The `deco.*` settings below are optional. When `deco.host` is set and no Deco is stored yet, Atlantis stores that Deco on start, as if it had been added in the browser, with the password encrypted. From then on the browser owns the connection: a restart never undoes a change made in **Settings → Deco**, and a Deco removed there stays removed unless `deco.host` is still configured. Change the address or password in Settings, not in the configuration.
+| Settings panel | What it sets |
+|---|---|
+| Deco | The main Deco's address, account and password |
+| Refresh | How often devices and the mesh are checked; when a device counts as offline |
+| Notifications | Channels (Shoutrrr, or WhatsApp through OpenWA with its own address and chat) and their events |
+| Notification timing | Time zone (default UTC) and quiet hours |
+| History | How long detailed samples (default 7 days) and hourly history (default 90 days) are kept |
+| Prometheus metrics | On or off (default on, at `/metrics`), per-device series (default watched devices), bearer token |
+| Advanced | Public address (secure cookies behind an HTTPS proxy), log level and format, debug endpoint |
 
-Refresh times saved in **Settings → Refresh** override `poll.*`.
+Changes apply at once; nothing needs a restart. Secrets (the Deco password, the metrics token, channel credentials) are encrypted and never shown again.
 
-| Key | Environment variable | Default | Description |
+### Set at startup
+
+There is no configuration file. Only two things are chosen before the web UI runs, and both are optional. Settings shows them read-only under **Advanced**.
+
+| Flag | Environment variable | Default | Description |
 |---|---|---|---|
-| `secret_key` | `ATLANTIS_SECRET_KEY` | **required** | Base64 of 32 bytes, from `atlantis keygen`. Encrypts stored credentials. |
-| `server.listen` | `ATLANTIS_SERVER_LISTEN` | `:8080` | Address and port to listen on. |
-| `server.base_url` | `ATLANTIS_SERVER_BASE_URL` | | The public URL. An `https://` URL makes the session cookie `Secure`. |
-| `server.trusted_proxies` | `ATLANTIS_SERVER_TRUSTED_PROXIES` | | Reverse proxies whose forwarded client address is trusted. |
-| `deco.transport` | `ATLANTIS_DECO_TRANSPORT` | `ssh` | `ssh` (the Deco app's protocol) or `luci` (the local web API). |
-| `deco.host` | `ATLANTIS_DECO_HOST` | | The main Deco's IP address or host name. Optional: the Deco can be added in the browser. Used only while no Deco is stored. |
-| `deco.port` | `ATLANTIS_DECO_PORT` | `0` | SSH port. `0` asks the Deco (TDP discovery), then falls back to `20001`. |
-| `deco.email` | `ATLANTIS_DECO_EMAIL` | required with `deco.host` for `ssh` | Your TP-Link ID email. |
-| `deco.password` | `ATLANTIS_DECO_PASSWORD` | needed once with `deco.host` | TP-Link ID password (`ssh`), or the local management password (`luci`). |
-| `deco.host_key` | `ATLANTIS_DECO_HOST_KEY` | | Pin the Deco's SSH host key (`SHA256:...`). If empty, Atlantis trusts the key it sees first. |
-| `deco.tls_pin` | `ATLANTIS_DECO_TLS_PIN` | | Pin the Deco's HTTPS certificate (`luci` only). If empty, Atlantis trusts the certificate it sees first. |
-| `poll.fast` | `ATLANTIS_POLL_FAST` | `30s` | How often clients are read (minimum `10s`). Settings → Refresh overrides it. |
-| `poll.slow` | `ATLANTIS_POLL_SLOW` | `5m` | How often Decos, the internet connection, Wi-Fi and firmware are read (minimum `10s`). Settings → Refresh overrides it. |
-| `poll.offline_after_misses` | `ATLANTIS_POLL_OFFLINE_AFTER_MISSES` | `2` | Missed fast polls before a device counts as offline. Settings → Refresh overrides it. |
-| `store.path` | `ATLANTIS_STORE_PATH` | `/data/atlantis.db` | SQLite database file. |
-| `store.raw_retention` | `ATLANTIS_STORE_RAW_RETENTION` | `168h` | How long raw samples are kept before being rolled up hourly. |
-| `store.rollup_retention` | `ATLANTIS_STORE_ROLLUP_RETENTION` | `2160h` | How long hourly history and events are kept. Must be at least `raw_retention`. |
-| `metrics.enabled` | `ATLANTIS_METRICS_ENABLED` | `true` | Serve Prometheus metrics. |
-| `metrics.path` | `ATLANTIS_METRICS_PATH` | `/metrics` | Metrics path. |
-| `metrics.per_client` | `ATLANTIS_METRICS_PER_CLIENT` | `watched` | Per-device series for `all`, `watched` or `none` of the devices. |
-| `metrics.token` | `ATLANTIS_METRICS_TOKEN` | | Bearer token that Prometheus sends. Without one, metrics require a signed-in browser session. |
-| `notify.quiet_hours` | `ATLANTIS_NOTIFY_QUIET_HOURS` | | `HH:MM-HH:MM` (may cross midnight). No notifications are sent in this window. |
-| `notify.timezone` | `ATLANTIS_NOTIFY_TIMEZONE` | `UTC` | Time zone for quiet hours and message times, such as `Asia/Jerusalem`. |
-| `openwa.url` | `ATLANTIS_OPENWA_URL` | | Default OpenWA server for WhatsApp channels. |
-| `openwa.api_key` | `ATLANTIS_OPENWA_API_KEY` | | Default OpenWA API key. |
-| `openwa.default_chat` | `ATLANTIS_OPENWA_DEFAULT_CHAT` | | Default WhatsApp chat (contact or group). |
-| `debug.enabled` | `ATLANTIS_DEBUG_ENABLED` | `false` | Enables `GET /api/v1/debug/raw` for raw Deco responses. |
-| `log.level` | `ATLANTIS_LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
-| `log.format` | `ATLANTIS_LOG_FORMAT` | `json` | `json` or `text`. |
+| `--server-listen` | `ATLANTIS_SERVER_LISTEN` | `:8080` | Address and port to listen on. |
+| `--store-path` | `ATLANTIS_STORE_PATH` | `atlantis.db` | The database file, relative to the working directory (`/data` in the image). The key file is kept next to it. If there is no `atlantis.db` in the working directory but `/data/atlantis.db` exists (the old default), that one is used. |
 
-Durations use Go's format: `30s`, `5m`, `168h`.
+A flag wins over its environment variable. The image's health check (`atlantis healthcheck`) reads only `ATLANTIS_SERVER_LISTEN`, so in Docker change the port with that variable rather than the flag.
 
-Example `atlantis.yaml`:
+`ATLANTIS_SECRET_KEY` (base64 of 32 bytes, from `atlantis keygen`) is for keeping the encryption key outside the data directory; when it is set, it is used instead of `secret.key`. Atlantis refuses to start with a key that doesn't open the passwords already stored.
 
-```yaml
-deco:                 # optional; or add the Deco in the browser
-  host: 192.168.68.1
-  email: you@example.com
-poll:
-  fast: 30s
-  slow: 5m
-store:
-  path: /data/atlantis.db
-metrics:
-  per_client: watched
-  token: change-me
-notify:
-  quiet_hours: "23:00-07:00"
-  timezone: Asia/Jerusalem
-```
-
-The Settings page shows the active configuration. The Deco connection and the refresh times are changed there; for everything else, edit the file or environment and restart Atlantis.
+Earlier versions read a YAML file, more `ATLANTIS_*` variables and more flags (`--config`, `--deco-*`, `--log-level`). Those are no longer read: the flags are still accepted, Atlantis logs a warning naming any of them that are still set, and the settings are made in the UI. The one exception is the old OpenWA defaults: on the first start, Atlantis copies those saved in Settings or set in `ATLANTIS_OPENWA_*` into any WhatsApp channel that left those fields empty. Defaults kept only in the old YAML file are not read; enter them on the channel.
 
 ## Using Atlantis
 
@@ -274,9 +232,9 @@ The Settings page shows the active configuration. The Deco connection and the re
   - **Release for the app:** sign Atlantis out for 10 minutes so you can use the Deco app.
   - **Resume now:** sign back in early, after a release, a pause, or another admin taking the session.
   - **Trust the new key:** shown when the Deco presents a different key than before. That is expected after a firmware update or reset; otherwise, don't trust it.
-- **Settings** also has the same session controls, plus **Release for an hour** and **Pause polling**, the notification channels and the active configuration.
+- **Settings** also has the same session controls, plus **Release for an hour** and **Pause polling**, the notification channels, and every other setting (see [Configuration](#configuration)).
 - **Renaming a device** (on its detail page, **Name and tags**) renames it on the Deco first, then in Atlantis. If the Deco refuses, for example because it doesn't list a device that has been away for a while, nothing is saved and the page says why. Clearing the name clears it in Atlantis only; the Deco keeps its name.
-- **Watching a device** (on its detail page) can limit notifications to the devices you care about. With `metrics.per_client: watched`, watched devices also get their own metrics.
+- **Watching a device** (on its detail page) can limit notifications to the devices you care about. With per-device metrics set to watched devices, they also get their own metrics.
 - **Not available yet:** restarting Decos. The button appears in the UI but is disabled until it is verified on real hardware. Use the Deco app for that.
 
 ### Wi-Fi changes
@@ -300,7 +258,7 @@ Add channels under **Settings → Notifications**. Each channel has:
 
 - **A service.**
   - **Shoutrrr:** one URL, such as `telegram://token@telegram?chats=@channel`, `discord://token@id`, `ntfy://ntfy.sh/topic` or `smtp://...`. See the [Shoutrrr services](https://containrrr.dev/shoutrrr/latest/services/overview/).
-  - **WhatsApp (OpenWA):** the server URL, API key and chat. Empty fields fall back to the `openwa.*` settings.
+  - **WhatsApp (OpenWA):** the OpenWA address and the chat to send to (both required), and the API key if your OpenWA server uses one.
 - **The events to send:**
   - a new device joining for the first time;
   - a device coming online or going offline;
@@ -330,13 +288,13 @@ Channel credentials are encrypted in the database and are never sent back to the
 | `deco_poll_errors_total` | `loop`, `reason` | Failed polls. |
 | `deco_session_logins_total` | `result` | Sign-ins to the Deco. |
 
-The per-device series follow `metrics.per_client`. Go runtime and process metrics are included too.
+The per-device series follow **Per-device series** in Settings. Go runtime and process metrics are included too.
 
 ```yaml
 scrape_configs:
   - job_name: atlantis
     authorization:
-      credentials: change-me   # metrics.token
+      credentials: change-me   # the bearer token from Settings
     static_configs:
       - targets: ["atlantis:8080"]
 ```
@@ -376,7 +334,7 @@ The UI uses the REST API under `/api/v1`. The OpenAPI spec is at `/api/openapi.y
 
 | Command | Purpose |
 |---|---|
-| `atlantis serve [--config FILE]` | Run the server. |
+| `atlantis serve [--server-listen ADDR] [--store-path FILE]` | Run the server. |
 | `atlantis keygen` | Print a new secret key. |
 | `atlantis healthcheck [--url URL]` | Exit 0 when the local server answers `/health` (used by the Docker health check). |
 | `atlantis version` | Print the version. |
@@ -391,16 +349,19 @@ Run any command with `--help` for all its flags.
 
 ## Security
 
-- The Deco password and notification credentials are encrypted at rest with AES-256-GCM, using `ATLANTIS_SECRET_KEY`. They are never returned by the API and never logged.
+- The Deco password, notification credentials and the metrics token are encrypted at rest with AES-256-GCM. The key is `secret.key` in the data directory (created on first start, readable only by Atlantis's user), or `ATLANTIS_SECRET_KEY` if set. Secrets are never returned by the API and never logged.
+- With the key file, a copy of the data directory alone can decrypt the stored passwords. To keep them apart, set `ATLANTIS_SECRET_KEY` instead (from `atlantis keygen`, or the contents of `secret.key`) and keep it outside the volume.
 - The Deco's SSH host key (or HTTPS certificate with `luci`) is pinned on first use. A different key stops Atlantis until you trust it from the UI.
 - Connecting a Deco signs in once to check the password and never retries a rejected one. After five rejected passwords in 15 minutes, Atlantis waits so the TP-Link ID isn't locked.
 - Wi-Fi changes are limited to the ones tested on a real Deco, and every change and connection change is written to the audit log (without passwords).
 - Atlantis's own account uses a bcrypt password, an HttpOnly SameSite=Strict session cookie, CSRF tokens on changes, and a lockout after repeated failed sign-ins.
-- Expose Atlantis only on your LAN or behind a reverse proxy with HTTPS. Set `server.base_url` to the `https://` address so the cookie is marked `Secure`.
-- The database holds your network's history and the encrypted credentials. Back up `/data` and the secret key together.
+- Expose Atlantis only on your LAN or behind a reverse proxy with HTTPS. Set the public address (**Settings → Advanced**) to the `https://` address: the sign-in cookie is then marked `Secure` for requests that arrive over HTTPS (directly, or with `X-Forwarded-Proto: https` from the proxy). Plain HTTP on the LAN keeps working.
+- The database holds your network's history and the encrypted credentials. Back up the data directory (database and `secret.key`) as a whole.
 
 ## Troubleshooting
 
+- **"The encryption key ... does not match the passwords stored in ...".** The key in use (`ATLANTIS_SECRET_KEY` or `secret.key`) is not the one the database was set up with, for example after restoring an older backup. Start Atlantis with the original key.
+- **"... holds encrypted passwords, but there is no ATLANTIS_SECRET_KEY and no secret.key".** The database was created with a key that is not available now (for example, an older install that used `ATLANTIS_SECRET_KEY`, started without it). Set `ATLANTIS_SECRET_KEY` to that key. Atlantis never makes a new key for such a database, because the stored passwords could not be read with it.
 - **"The Deco app or another admin is signed in; retrying shortly".** The Deco app (or a browser) holds the Deco's single admin session. Close the app, or wait: Atlantis backs off and tries again. Use **Release for the app** whenever you need the app.
 - **"The Deco rejected the password".** Atlantis stops trying, to avoid locking the account. Enter the right TP-Link ID password in **Settings → Deco → Change connection** (or on the Reconnect page).
 - **"This Deco only accepts TP-Link's newer encrypted (TLS) connection".** The Deco's model or firmware doesn't accept the SSH connection Atlantis uses. See [Supported Decos](#supported-decos).

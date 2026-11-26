@@ -146,7 +146,7 @@ func main() {
 	publish(d)
 
 	h, p := srv.Addr()
-	fmt.Printf("fake Deco SSH on %s:%d\n\nexport ATLANTIS_DECO_HOST=%s ATLANTIS_DECO_PORT=%d ATLANTIS_DECO_EMAIL=%s ATLANTIS_DECO_PASSWORD=%s\n",
+	fmt.Printf("fake Deco SSH on %s:%d\n\nConnect it in Atlantis: address %s, port %d (advanced options), TP-Link ID %s, password %s\n",
 		h, p, h, p, email, password)
 
 	if *churn > 0 {

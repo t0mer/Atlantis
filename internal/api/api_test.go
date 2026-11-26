@@ -20,11 +20,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/t0mer/atlantis/internal/config"
 	"github.com/t0mer/atlantis/internal/deco"
 	"github.com/t0mer/atlantis/internal/metrics"
 	"github.com/t0mer/atlantis/internal/notify"
 	"github.com/t0mer/atlantis/internal/poller"
+	"github.com/t0mer/atlantis/internal/prefs"
 	"github.com/t0mer/atlantis/internal/secret"
 	"github.com/t0mer/atlantis/internal/site"
 	"github.com/t0mer/atlantis/internal/store"
@@ -97,6 +97,7 @@ type env struct {
 	srv  *httptest.Server
 	fake *fakeDeco
 	st   *store.Store
+	box  *secret.Box
 	cl   *http.Client
 	csrf string
 }
@@ -112,16 +113,13 @@ func newEnv(t *testing.T) *env {
 	box, _ := secret.New(secret.NewKey())
 	sealed, _ := box.Seal("decopass")
 	st.SaveNetwork(ctx, store.Network{Host: "192.0.2.1", Transport: "ssh", Email: "owner@example.com", PasswordEnc: sealed})
-	cfg := &config.Config{Deco: config.Deco{Transport: "ssh"}, Poll: config.Poll{Fast: time.Minute, Slow: time.Minute, OfflineAfterMisses: 2},
-		Store: config.Store{RawRetention: time.Hour, RollupRetention: 2 * time.Hour}, Metrics: config.Metrics{Path: "/metrics", PerClient: "all"},
-		Notify: config.Notify{Timezone: "UTC"}, Debug: config.Debug{Enabled: true}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	f := &fakeDeco{ssid: "old"}
 	hub := poller.NewHub()
-	disp := notify.New(st, box, cfg, func() string { return "Home" }, log)
+	disp := notify.New(st, box, func() string { return "Home" }, log)
 	m := metrics.New("all")
 	sctx, cancel := context.WithCancel(ctx)
-	sites := site.New(sctx, site.Deps{Config: cfg, Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log,
+	sites := site.New(sctx, site.Deps{Poll: site.Poll{Fast: time.Minute, Slow: time.Minute, OfflineAfterMisses: 2}, Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log,
 		Build: func(context.Context, store.Network, string, *site.HostKeys, func(string), *slog.Logger) (deco.Client, *site.Discovery, error) {
 			return f, &site.Discovery{Model: "M5", Role: "master", Port: 20001}, nil
 		}})
@@ -138,11 +136,19 @@ func newEnv(t *testing.T) *env {
 			t.Fatal("the first poll did not finish")
 		}
 	}
-	s := New(Deps{Config: cfg, Store: st, Site: sites, Hub: hub, Notify: disp, Metrics: m.Handler(), Version: "test", Log: log})
+	pf := prefs.New(st, box)
+	if err := pf.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pf.Update(ctx, prefs.Patch{Debug: &prefs.DebugPrefs{Enabled: true},
+		Metrics: &prefs.MetricsPatch{Enabled: true, Path: "/metrics", PerClient: "all"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Deps{Store: st, Site: sites, Prefs: pf, Hub: hub, Notify: disp, Metrics: m.Handler(), Version: "test", Log: log})
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	jar, _ := cookiejar.New(nil)
-	return &env{srv: srv, fake: f, st: st, cl: &http.Client{Jar: jar}}
+	return &env{srv: srv, fake: f, st: st, box: box, cl: &http.Client{Jar: jar}}
 }
 
 func (e *env) do(t *testing.T, method, path, body string, csrf bool) (int, map[string]any, string) {
@@ -328,6 +334,26 @@ func TestChannelsNeverReturnSecrets(t *testing.T) {
 	if code, _, _ := e.do(t, "POST", "/api/v1/channels", `{"kind":"email","name":"x","config":{"url":"x"}}`, true); code != 400 {
 		t.Fatal("unknown kind accepted")
 	}
+	// OpenWA has no defaults: each channel needs its own address and chat.
+	for _, cfg := range []string{`{"url":"http://wa.lan"}`, `{"chat":"123@c.us"}`} {
+		if code, m, _ := e.do(t, "POST", "/api/v1/channels", `{"kind":"openwa","name":"wa","config":`+cfg+`}`, true); code != 400 || !strings.Contains(m["error"].(string), "address and the chat") {
+			t.Fatalf("%s: %d %v", cfg, code, m)
+		}
+	}
+	if code, _, _ := e.do(t, "POST", "/api/v1/channels", `{"kind":"openwa","name":"wa","config":{"url":"http://wa.lan","chat":"123@c.us"}}`, true); code != 201 {
+		t.Fatalf("a complete OpenWA channel: %d", code)
+	}
+	// A channel saved before OpenWA needed its own fields can still be
+	// switched off or renamed (its config is not touched).
+	sealed, _ := e.box.Seal(`{"url":"","chat":""}`)
+	old, _ := e.st.SaveChannel(context.Background(), store.Channel{Kind: "openwa", Name: "old wa", ConfigEnc: sealed, Enabled: true})
+	if code, _, _ := e.do(t, "PUT", "/api/v1/channels/"+itoa(int(old.ID)), `{"name":"old wa","enabled":false}`, true); code != 200 {
+		t.Fatalf("switching off an old channel: %d", code)
+	}
+	// Changing the kind without a new config is checked against the new kind.
+	if code, _, _ := e.do(t, "PUT", "/api/v1/channels/"+itoa(id), `{"kind":"openwa"}`, true); code != 400 {
+		t.Fatalf("a Shoutrrr config under the OpenWA kind: %d", code)
+	}
 	if code, m, _ := e.do(t, "POST", "/api/v1/channels/test", `{"kind":"shoutrrr","config":{"url":"not-a-scheme://x"}}`, true); code != 502 || m["ok"] != false {
 		t.Fatal("draft test of a broken URL must fail")
 	}
@@ -380,7 +406,7 @@ func TestStreamSendsSnapshot(t *testing.T) {
 
 // The spec and the router must list the same routes.
 func TestSpecMatchesRouter(t *testing.T) {
-	s := New(Deps{Config: &config.Config{Metrics: config.Metrics{Path: "/metrics"}, Debug: config.Debug{Enabled: true}}, Log: slog.Default()})
+	s := New(Deps{Prefs: prefs.New(nil, nil), Log: slog.Default()})
 	var routes []string
 	chi.Walk(s.Handler().(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if strings.HasPrefix(route, "/api/v1/") || route == "/health" {
@@ -417,7 +443,18 @@ func TestMetricsNeedAuth(t *testing.T) {
 }
 
 func TestMetricsBearerToken(t *testing.T) {
-	s := New(Deps{Config: &config.Config{Metrics: config.Metrics{Path: "/metrics", Token: "scrape-me"}}, Log: slog.Default(),
+	st, err := store.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	box, _ := secret.New(secret.NewKey())
+	pf := prefs.New(st, box)
+	tok := "scrape-me"
+	if _, err := pf.Update(context.Background(), prefs.Patch{Metrics: &prefs.MetricsPatch{Enabled: true, Path: "/metrics", PerClient: "watched", Token: &tok}}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Deps{Prefs: pf, Log: slog.Default(),
 		Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })})
 	for tok, want := range map[string]int{"scrape-me": 200, "wrong": 401, "": 401} {
 		req := httptest.NewRequest("GET", "/metrics", nil)
@@ -435,11 +472,11 @@ func TestMetricsBearerToken(t *testing.T) {
 // Review finding: the stream must outlive the 60s request timeout.
 func TestStreamIsNotTimedOut(t *testing.T) {
 	var found bool
-	s := New(Deps{Config: &config.Config{Metrics: config.Metrics{Path: "/metrics"}}, Log: slog.Default()})
+	s := New(Deps{Prefs: prefs.New(nil, nil), Log: slog.Default()})
 	chi.Walk(s.Handler().(chi.Routes), func(method, route string, h http.Handler, mws ...func(http.Handler) http.Handler) error {
 		if route == "/api/v1/stream" {
 			found = true
-			if len(mws) > 3 { // Recoverer, securityHeaders, requireAuth (via With); a timeout would be a 4th
+			if len(mws) > 4 { // Recoverer, securityHeaders, metricsRoute, requireAuth (via With); a timeout would be a 5th
 				t.Errorf("stream has %d middlewares; the timeout must not apply", len(mws))
 			}
 		}

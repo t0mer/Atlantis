@@ -1,6 +1,8 @@
 package api
 
 import (
+	"net/http"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -70,7 +72,7 @@ func TestRefreshIntervals(t *testing.T) {
 	e := newEnv(t)
 	e.login(t)
 	_, m, _ := e.do(t, "GET", "/api/v1/settings", "", false)
-	if p := m["poll"].(map[string]any); p["fast"] != "1m0s" || p["source"] != "config" {
+	if p := m["poll"].(map[string]any); p["fast"] != "1m0s" || p["source"] != nil {
 		t.Fatalf("%v", p)
 	}
 	for _, bad := range []string{
@@ -86,7 +88,7 @@ func TestRefreshIntervals(t *testing.T) {
 		}
 	}
 	code, m, _ := e.do(t, "PUT", "/api/v1/settings", `{"poll":{"fast":"15s","slow":"2m","offline_after_misses":3}}`, true)
-	if p := m["poll"].(map[string]any); code != 200 || p["fast"] != "15s" || p["slow"] != "2m0s" || p["offline_after_misses"] != float64(3) || p["source"] != "ui" {
+	if p := m["poll"].(map[string]any); code != 200 || p["fast"] != "15s" || p["slow"] != "2m0s" || p["offline_after_misses"] != float64(3) {
 		t.Fatalf("%d %v", code, m)
 	}
 }
@@ -119,5 +121,96 @@ func TestRenameAlsoRenamesOnTheDeco(t *testing.T) {
 	_, m, _ = e.do(t, "GET", "/api/v1/clients/02:bb:cc:dd:ee:02", "", false)
 	if code != 404 || m["client"].(map[string]any)["alias"] == "Gone" {
 		t.Fatalf("%d %v", code, m["client"])
+	}
+}
+
+func TestSettingsSectionsApplyAtOnce(t *testing.T) {
+	e := newEnv(t)
+	e.login(t)
+	// Metrics are served at the configured path; the token is write-only.
+	code, m, _ := e.do(t, "PUT", "/api/v1/settings", `{"metrics":{"enabled":true,"path":"/prom","per_client":"all","token":"scrape-me"},
+		"debug":{"enabled":false},"logging":{"level":"debug","format":"text"},"history":{"raw_retention":"48h","rollup_retention":"720h"},
+		"notifications":{"quiet_hours":"23:00-07:00","timezone":"Asia/Jerusalem"},
+		"access":{"base_url":"https://atlantis.lan/"}}`, true)
+	if code != 200 {
+		t.Fatalf("%d %v", code, m)
+	}
+	if mm := m["metrics"].(map[string]any); mm["path"] != "/prom" || mm["token_set"] != true || mm["token"] != nil {
+		t.Fatalf("%v", mm)
+	}
+	if l := m["logging"].(map[string]any); l["level"] != "debug" || l["format"] != "text" {
+		t.Fatalf("%v", l)
+	}
+	if _, ok := m["openwa"]; ok {
+		t.Fatal("there are no OpenWA defaults any more; OpenWA is set on its channel")
+	}
+	if a := m["access"].(map[string]any); a["base_url"] != "https://atlantis.lan" {
+		t.Fatalf("%v", a)
+	}
+	get := func(path, auth string) int {
+		req, _ := http.NewRequest("GET", e.srv.URL+path, nil)
+		if auth != "" {
+			req.Header.Set("Authorization", "Bearer "+auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if c := get("/prom", "scrape-me"); c != 200 {
+		t.Fatalf("metrics at the new path: %d", c)
+	}
+	if c := get("/prom", "wrong"); c != 401 {
+		t.Fatalf("the token must be enforced: %d", c)
+	}
+	if c := get("/metrics", "scrape-me"); c == 200 {
+		t.Fatal("the old metrics path must stop serving")
+	}
+	if code, _, _ := e.do(t, "GET", "/api/v1/debug/raw?area=x&form=y", "", false); code != 404 {
+		t.Fatalf("debug off: %d", code)
+	}
+	// Disabling metrics stops them; a nil token keeps it.
+	e.do(t, "PUT", "/api/v1/settings", `{"metrics":{"enabled":false,"path":"/prom","per_client":"all"}}`, true)
+	if c := get("/prom", "scrape-me"); c == 200 {
+		t.Fatal("disabled metrics must not be served")
+	}
+	_, m, _ = e.do(t, "GET", "/api/v1/settings", "", false)
+	if m["metrics"].(map[string]any)["token_set"] != true {
+		t.Fatal("an omitted token must keep the saved one")
+	}
+	// All or nothing: one bad section rejects the whole request.
+	code, _, _ = e.do(t, "PUT", "/api/v1/settings", `{"logging":{"level":"error","format":"json"},"notifications":{"timezone":"Mars/Base"}}`, true)
+	_, m, _ = e.do(t, "GET", "/api/v1/settings", "", false)
+	if code != 400 || m["logging"].(map[string]any)["level"] != "debug" {
+		t.Fatalf("%d %v", code, m["logging"])
+	}
+	// Secure cookies need the https public address and an HTTPS request:
+	// plain HTTP still gets a cookie the browser keeps (no lockout).
+	login := func(proto string) *http.Cookie {
+		req, _ := http.NewRequest("POST", e.srv.URL+"/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"correct horse battery"}`))
+		req.Header.Set("Content-Type", "application/json")
+		if proto != "" {
+			req.Header.Set("X-Forwarded-Proto", proto)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		for _, c := range resp.Cookies() {
+			if c.Name == "atlantis_session" {
+				return c
+			}
+		}
+		t.Fatal("no session cookie")
+		return nil
+	}
+	if login("").Secure {
+		t.Fatal("a plain HTTP login must not get a Secure cookie")
+	}
+	if !login("https").Secure {
+		t.Fatal("an HTTPS login with an https public address must get a Secure cookie")
 	}
 }
