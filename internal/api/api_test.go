@@ -514,3 +514,13 @@ func TestLoginLimitHoldsUnderConcurrency(t *testing.T) {
 		t.Fatalf("%d guesses were checked, limit is %d", unauthorized, maxFailures)
 	}
 }
+
+func TestSetupPasswordMinimumIsSix(t *testing.T) {
+	e := newEnv(t)
+	if code, _, _ := e.do(t, "POST", "/api/v1/auth/setup", `{"username":"admin","password":"12345"}`, false); code != 400 {
+		t.Fatalf("5 characters accepted: %d", code)
+	}
+	if code, _, _ := e.do(t, "POST", "/api/v1/auth/setup", `{"username":"admin","password":"123456"}`, false); code != 200 && code != 201 {
+		t.Fatalf("6 characters rejected: %d", code)
+	}
+}
