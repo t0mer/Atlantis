@@ -202,7 +202,9 @@ func serve(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		h := pf.Get().History
 		return h.RawRetention, h.RollupRetention
 	}
-	sites = site.New(ctx, site.Deps{Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log, Retention: retention})
+	trustNewHostKey := func() bool { return pf.Get().Security.TrustNewHostKey }
+	sites = site.New(ctx, site.Deps{Store: st, Box: box, Hub: hub, Notify: disp, Metrics: m, Log: log, Retention: retention,
+		TrustNewHostKey: trustNewHostKey})
 	if err := sites.LoadPoll(ctx); err != nil {
 		return err
 	}

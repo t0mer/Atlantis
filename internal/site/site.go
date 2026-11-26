@@ -6,6 +6,7 @@ package site
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"github.com/t0mer/atlantis/internal/deco/tmp/sshconn"
 	"github.com/t0mer/atlantis/internal/deco/tmp/tdp"
 	"github.com/t0mer/atlantis/internal/deco/tmpclient"
+	"github.com/t0mer/atlantis/internal/events"
 	"github.com/t0mer/atlantis/internal/metrics"
 	"github.com/t0mer/atlantis/internal/poller"
 	"github.com/t0mer/atlantis/internal/prefs"
@@ -84,6 +86,9 @@ type Deps struct {
 	Retention func() (raw, rollup time.Duration)
 	// Poll is the refresh intervals until some are saved; zero = DefaultPoll.
 	Poll Poll
+	// TrustNewHostKey says whether a changed SSH host key is trusted
+	// automatically (Settings); nil never does.
+	TrustNewHostKey func() bool
 }
 
 // Site owns the current Run.
@@ -135,7 +140,7 @@ func (s *Site) Start(ctx context.Context) error {
 		s.d.Log.Warn("the Deco has no stored password; add it in the UI")
 		return nil
 	}
-	return s.start(ctx, n, password, newHostKeys(s.d.Store, n))
+	return s.start(ctx, n, password, s.newHostKeys(n))
 }
 
 func (s *Site) start(ctx context.Context, n store.Network, password string, keys *hostKeys) error {
@@ -241,9 +246,11 @@ func (s *Site) Connect(ctx context.Context, c Conn) (store.Network, error) {
 		n.ID, n.Name = cur.ID, cur.Name
 		sameTarget := cur.Host == n.Host && cur.Port == n.Port && cur.Transport == n.Transport && strings.EqualFold(cur.Email, n.Email)
 		if password == "" {
-			// The stored password is only ever sent to the device it was
-			// entered for; a new target needs it typed again, so the saved
-			// credential cannot be redirected to another machine.
+			// The stored password is only ever sent to the address and
+			// account it was entered for; a new target needs it typed again,
+			// so the saved credential cannot be redirected to another
+			// address. (With Security.TrustNewHostKey on, a changed SSH key
+			// at the same address is trusted.)
 			if !sameTarget {
 				return store.Network{}, fmt.Errorf("%w: enter the password to connect to a different address or account", ErrInvalid)
 			}
@@ -271,7 +278,8 @@ func (s *Site) Connect(ctx context.Context, c Conn) (store.Network, error) {
 		}
 		return store.Network{}, err
 	}
-	if err := s.check(ctx, &n, password); err != nil {
+	changed, err := s.check(ctx, &n, password)
+	if err != nil {
 		return fail(err)
 	}
 	if n.PasswordEnc, err = s.d.Box.Seal(password); err != nil {
@@ -281,7 +289,10 @@ func (s *Site) Connect(ctx context.Context, c Conn) (store.Network, error) {
 	if err != nil {
 		return fail(err)
 	}
-	return saved, s.start(ctx, saved, password, newHostKeys(s.d.Store, saved))
+	if changed != nil {
+		s.recordKeyChange(saved, changed.from, changed.to)
+	}
+	return saved, s.start(ctx, saved, password, s.newHostKeys(saved))
 }
 
 // Changing reports whether a stored Deco's connection is being changed
@@ -299,7 +310,7 @@ func (s *Site) restartStored(ctx context.Context) {
 	}
 	password, err := s.d.Box.Open(n.PasswordEnc)
 	if err == nil {
-		err = s.start(ctx, n, password, newHostKeys(s.d.Store, n))
+		err = s.start(ctx, n, password, s.newHostKeys(n))
 	}
 	if err != nil {
 		s.d.Log.Error("restarting the previous Deco connection", "err", err)
@@ -307,27 +318,56 @@ func (s *Site) restartStored(ctx context.Context) {
 	}
 }
 
+// keyChange is an SSH host key trusted in place of the pinned one.
+type keyChange struct{ from, to string }
+
 // check logs in to the Deco with n and reads its nodes, then logs out. A
-// host key or certificate seen for the first time is recorded in n.
-func (s *Site) check(ctx context.Context, n *store.Network, password string) error {
-	keys := &hostKeys{pin: n.HostKey, acceptNew: n.HostKey == "", save: func(fp string) error { n.HostKey = fp; return nil }}
+// host key or certificate seen for the first time, or a changed host key
+// trusted automatically, is recorded in n; the change is returned so it is
+// recorded as an event once n is saved.
+func (s *Site) check(ctx context.Context, n *store.Network, password string) (*keyChange, error) {
+	var changed *keyChange
+	keys := &hostKeys{pin: n.HostKey, acceptNew: n.HostKey == "", trust: s.trustNewHostKey,
+		save:     func(fp string) error { n.HostKey = fp; return nil },
+		onChange: func(from, to string) { changed = &keyChange{from, to} }}
 	client, disc, err := s.d.Build(ctx, *n, password, &HostKeys{k: keys}, func(fp string) { n.TLSPin = fp }, s.d.Log)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if disc != nil && disc.Role != "" && disc.Role != "master" {
-		return ErrNotMain
+		return nil, ErrNotMain
 	}
 	defer func() { _ = client.Logout(context.Background()) }()
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := client.Login(cctx); err != nil {
-		return explain(err)
+		return nil, explain(err)
 	}
 	if _, err := client.Devices(cctx); err != nil {
-		return explain(err)
+		return nil, explain(err)
 	}
-	return nil
+	keys.mu.Lock() // onChange ran on the dial goroutine
+	defer keys.mu.Unlock()
+	return changed, nil
+}
+
+func (s *Site) trustNewHostKey() bool {
+	return s.d.TrustNewHostKey != nil && s.d.TrustNewHostKey()
+}
+
+// recordKeyChange stores, publishes and notifies a deco.host_key_changed
+// event for a host key that was trusted automatically.
+func (s *Site) recordKeyChange(n store.Network, from, to string) {
+	payload, _ := json.Marshal(map[string]string{"from": from, "to": to})
+	se, err := s.d.Store.AddEvent(context.Background(), n.ID, store.Event{Type: events.DecoKeyChanged, Subject: n.Host, Payload: payload})
+	if err != nil {
+		s.d.Log.Error("storing event", "type", events.DecoKeyChanged, "err", err)
+		return
+	}
+	s.d.Hub.Publish(poller.Message{Kind: "event", Data: se})
+	if s.d.Notify != nil {
+		s.d.Notify.Notify(se, n.Host, false)
+	}
 }
 
 // explain turns a transport error into one the user can act on. Errors
@@ -390,7 +430,7 @@ func (s *Site) AcceptHostKey(ctx context.Context) error {
 			return err
 		}
 		s.stop(ctx)
-		if err := s.start(ctx, n, password, newHostKeys(s.d.Store, n)); err != nil {
+		if err := s.start(ctx, n, password, s.newHostKeys(n)); err != nil {
 			s.d.Hub.Publish(poller.Message{Kind: "deco", Data: nil}) // nothing runs now
 			return err
 		}
@@ -433,19 +473,30 @@ func (c Conn) validate() error {
 
 // hostKeys keeps the SSH host-key pin and lets a new key be accepted: after
 // accept, the next connection trusts and stores whatever key is presented.
+// When trust says so, a changed key is trusted and stored at once and
+// onChange is told.
 type hostKeys struct {
 	mu        sync.Mutex
 	pin       string
 	acceptNew bool
 	save      func(string) error
+	trust     func() bool
+	onChange  func(from, to string)
 }
 
-func newHostKeys(st *store.Store, n store.Network) *hostKeys {
+func (s *Site) newHostKeys(n store.Network) *hostKeys {
 	// The first connection trusts and stores the key the Deco presents
 	// (trust on first use, CLAUDE.md §5.1).
-	return &hostKeys{pin: n.HostKey, acceptNew: n.HostKey == "", save: func(fp string) error {
-		return st.SetHostKey(context.Background(), n.ID, fp)
-	}}
+	return &hostKeys{pin: n.HostKey, acceptNew: n.HostKey == "", trust: s.trustNewHostKey,
+		save: func(fp string) error {
+			err := s.d.Store.SetHostKey(context.Background(), n.ID, fp)
+			if err != nil {
+				s.d.Log.Error("saving the SSH host key", "err", err)
+			}
+			return err
+		},
+		onChange: func(from, to string) { s.recordKeyChange(n, from, to) },
+	}
 }
 
 func (h *hostKeys) current() (string, bool) {
@@ -463,6 +514,22 @@ func (h *hostKeys) seen(fp string) {
 	}
 }
 
+// changed is asked when the Deco presents a key other than the pin. It
+// reports whether the new key is trusted.
+func (h *hostKeys) changed(from, to string) bool {
+	if h.trust == nil || !h.trust() {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pin, h.acceptNew = to, false
+	_ = h.save(to)
+	if h.onChange != nil {
+		h.onChange(from, to)
+	}
+	return true
+}
+
 func (h *hostKeys) accept() {
 	h.mu.Lock()
 	h.pin, h.acceptNew = "", true
@@ -477,6 +544,10 @@ func (h *HostKeys) Current() (pin string, acceptNew bool) { return h.k.current()
 
 // Seen records the fingerprint the Deco presented.
 func (h *HostKeys) Seen(fp string) { h.k.seen(fp) }
+
+// Changed is asked when the Deco presents a key other than the pin; it
+// reports whether the new key is trusted (and then stores it).
+func (h *HostKeys) Changed(from, to string) bool { return h.k.changed(from, to) }
 
 // Build makes the real client: SSH (TDP discovery, TP-Link ID login,
 // host-key pinning) or the local web API.
@@ -522,6 +593,14 @@ func Build(ctx context.Context, n store.Network, password string, keys *HostKeys
 			HostKeyPin: pin, AcceptNew: acceptNew, OnHostKey: func(fp string) {
 				log.Info("ssh host key", "fingerprint", fp, "trusted", acceptNew)
 				keys.Seen(fp)
+			},
+			OnHostKeyChanged: func(from, to string) bool {
+				if keys.Changed(from, to) {
+					log.Warn("the Deco's SSH host key changed; trusting the new key (Settings → Advanced)", "from", from, "to", to)
+					return true
+				}
+				log.Warn("the Deco's SSH host key changed; waiting for it to be accepted", "from", from, "to", to)
+				return false
 			},
 		})
 	}

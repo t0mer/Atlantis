@@ -20,10 +20,13 @@ const (
 	WANDown         = "wan.down"
 	WANIPChanged    = "wan.ip_changed"
 	FirmwareChanged = "firmware.changed"
+	// DecoKeyChanged is recorded when the Deco's changed SSH host key was
+	// trusted automatically (Settings); internal/site emits it.
+	DecoKeyChanged = "deco.host_key_changed"
 )
 
 // All lists every event type, for settings and channel filters.
-var All = []string{ClientJoined, ClientOnline, ClientOffline, NodeOnline, NodeOffline, WANUp, WANDown, WANIPChanged, FirmwareChanged}
+var All = []string{ClientJoined, ClientOnline, ClientOffline, NodeOnline, NodeOffline, WANUp, WANDown, WANIPChanged, FirmwareChanged, DecoKeyChanged}
 
 // Event is one change. Subject is a client MAC or node ID.
 type Event struct {
