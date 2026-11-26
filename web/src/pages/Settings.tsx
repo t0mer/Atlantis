@@ -13,7 +13,7 @@ import {
 } from "../api/hooks";
 import type { Channel, EventType, Settings as SettingsData } from "../api/types";
 import { DecoForm } from "../components/DecoForm";
-import { AdvancedPanel, HistoryPanel, MetricsPanel, NotificationsPanel, OpenWAPanel } from "../components/SettingsPanels";
+import { AdvancedPanel, HistoryPanel, MetricsPanel, NotificationsPanel } from "../components/SettingsPanels";
 import {
   Button,
   Confirm,
@@ -110,7 +110,7 @@ function ChannelDialog({ open, onOpenChange, editing, allEvents }: { open: boole
   };
   const keep = editing?.configured ? "Leave blank to keep the saved value" : undefined;
   // The server replaces the whole config, so once any OpenWA field is
-  // retyped all three are needed.
+  // retyped the address and chat are needed again (and the key, if used).
   const needAll = !editing || cfgTyped;
   const keepAll = editing?.configured && !cfgTyped ? "Leave all three blank to keep the saved values" : undefined;
   return (
@@ -140,8 +140,8 @@ function ChannelDialog({ open, onOpenChange, editing, allEvents }: { open: boole
             <Field label="OpenWA address" hint={keepAll ?? "For example http://openwa:8002"}>
               <Input value={cfg.url} onChange={(e) => setCfg({ ...cfg, url: e.target.value })} required={needAll} autoComplete="off" />
             </Field>
-            <Field label="API key">
-              <Input type="password" value={cfg.api_key} onChange={(e) => setCfg({ ...cfg, api_key: e.target.value })} required={needAll} autoComplete="off" />
+            <Field label="API key" hint="Only if your OpenWA server uses one.">
+              <Input type="password" value={cfg.api_key} onChange={(e) => setCfg({ ...cfg, api_key: e.target.value })} autoComplete="off" />
             </Field>
             <Field label="Send to" hint="A phone number in international format with no + (972501234567), or a group ID">
               <Input value={cfg.chat} onChange={(e) => setCfg({ ...cfg, chat: e.target.value })} required={needAll} autoComplete="off" />
@@ -382,8 +382,7 @@ function RefreshPanel({ s }: { s: SettingsData }) {
       <ErrorNote error={set.error} />
       <div className="mt-4 flex items-center justify-between gap-4">
         <p className="text-xs text-drift">
-          {s.poll.source === "ui" ? "Set here; overrides the configuration file." : "From the configuration file until you save here."} Faster checks mean
-          more sign-in traffic to the Deco.
+          Faster checks mean more sign-in traffic to the Deco.
         </p>
         <Button
           tone="primary"
@@ -413,7 +412,6 @@ export function Settings() {
         {s && (
           <>
             <NotificationsPanel key={k(s.notifications)} s={s} />
-            <OpenWAPanel key={k(s.openwa)} s={s} />
             <HistoryPanel key={k(s.history)} s={s} />
             <MetricsPanel key={k(s.metrics)} s={s} />
             <AdvancedPanel key={k([s.access, s.logging, s.debug])} s={s} />

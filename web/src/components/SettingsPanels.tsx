@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useSaveSettings } from "../api/hooks";
-import type { Settings, SettingSource, SettingsPatch } from "../api/types";
+import type { Settings, SettingsPatch } from "../api/types";
 import { goDuration } from "../lib/format";
 import { Button, ErrorNote, Field, Input, Panel, Switch, selectClass, useToast } from "./ui";
 
@@ -21,12 +21,9 @@ function LabeledSwitch({ checked, onChange, label }: { checked: boolean; onChang
   );
 }
 
-const sourceNote = (src: SettingSource) => (src === "ui" ? "Set here." : "From the configuration file until you save here.");
-
-/** A settings panel: a Save button enabled when something changed, and where the values come from. */
+/** A settings panel with a Save button enabled when something changed. */
 function SettingsPanel({
   title,
-  source,
   changed,
   patch,
   saved,
@@ -35,7 +32,6 @@ function SettingsPanel({
   onSaved,
 }: {
   title: string;
-  source?: SettingSource;
   changed: boolean;
   patch: () => SettingsPatch;
   saved: string;
@@ -50,9 +46,7 @@ function SettingsPanel({
       <div className="space-y-4">{children}</div>
       <ErrorNote error={save.error} />
       <div className="mt-4 flex items-center justify-between gap-4">
-        <p className="text-xs text-drift">
-          {source && sourceNote(source)} {note}
-        </p>
+        <p className="text-xs text-drift">{note}</p>
         <Button tone="primary" disabled={!changed || save.isPending} onClick={() => save.mutate(patch(), { onSuccess: () => (onSaved?.(), toast(saved)) })}>
           Save
         </Button>
@@ -71,7 +65,6 @@ export function HistoryPanel({ s }: { s: Settings }) {
   return (
     <SettingsPanel
       title="History"
-      source={s.history.source}
       changed={changed}
       saved="History settings saved"
       // An untouched value is sent back exactly as it was (hours are rounded for display).
@@ -128,7 +121,6 @@ export function NotificationsPanel({ s }: { s: Settings }) {
   return (
     <SettingsPanel
       title="Notification timing"
-      source={s.notifications.source}
       changed={changed}
       saved="Notification timing saved"
       patch={() => ({ notifications: { quiet_hours: hours, timezone: tz } })}
@@ -191,35 +183,6 @@ function SecretField({ label, hint, isSet, value, onChange, cleared, onClear }: 
 
 const secret = (value: string, cleared: boolean) => (cleared ? "" : value ? value : undefined);
 
-export function OpenWAPanel({ s }: { s: Settings }) {
-  const [url, setUrl] = useState(s.openwa.url);
-  const [chat, setChat] = useState(s.openwa.default_chat);
-  const [key, setKey] = useState("");
-  const [clear, setClear] = useState(false);
-  const changed = url !== s.openwa.url || chat !== s.openwa.default_chat || key !== "" || clear;
-  return (
-    <SettingsPanel
-      title="WhatsApp (OpenWA) defaults"
-      source={s.openwa.source}
-      changed={changed}
-      saved="WhatsApp defaults saved"
-      patch={() => ({ openwa: { url: url.trim(), default_chat: chat.trim(), api_key: secret(key.trim(), clear) } })}
-      onSaved={() => (setKey(""), setClear(false))}
-      note="WhatsApp channels that leave these empty use them."
-    >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="OpenWA server URL">
-          <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="http://openwa.lan:8002" autoComplete="off" />
-        </Field>
-        <Field label="Default chat" hint="A contact or group ID.">
-          <Input value={chat} onChange={(e) => setChat(e.target.value)} autoComplete="off" />
-        </Field>
-      </div>
-      <SecretField label="API key" hint="Stored encrypted and never shown." isSet={s.openwa.api_key_set} value={key} onChange={setKey} cleared={clear} onClear={setClear} />
-    </SettingsPanel>
-  );
-}
-
 export function MetricsPanel({ s }: { s: Settings }) {
   const [enabled, setEnabled] = useState(s.metrics.enabled);
   const [path, setPath] = useState(s.metrics.path);
@@ -230,7 +193,6 @@ export function MetricsPanel({ s }: { s: Settings }) {
   return (
     <SettingsPanel
       title="Prometheus metrics"
-      source={s.metrics.source}
       changed={changed}
       saved="Metrics settings saved"
       patch={() => ({ metrics: { enabled, path: path.trim(), per_client: per, token: secret(token.trim(), clear) } })}
@@ -266,13 +228,14 @@ export function MetricsPanel({ s }: { s: Settings }) {
 export function AdvancedPanel({ s }: { s: Settings }) {
   const [baseUrl, setBaseUrl] = useState(s.access.base_url);
   const [level, setLevel] = useState(s.logging.level);
+  const [format, setFormat] = useState(s.logging.format);
   const [debug, setDebug] = useState(s.debug.enabled);
-  const changed = baseUrl !== s.access.base_url || level !== s.logging.level || debug !== s.debug.enabled;
+  const logChanged = level !== s.logging.level || format !== s.logging.format;
+  const changed = baseUrl !== s.access.base_url || logChanged || debug !== s.debug.enabled;
   const facts: [string, string][] = [
     ["Listening on", s.startup.listen],
     ["Database", s.startup.data_path],
     ["Encryption key", s.startup.key_source],
-    ["Log format", s.startup.log_format],
     ["Version", s.version],
   ];
   return (
@@ -283,21 +246,27 @@ export function AdvancedPanel({ s }: { s: Settings }) {
       patch={() => {
         const p: SettingsPatch = {};
         if (baseUrl !== s.access.base_url) p.access = { base_url: baseUrl.trim() };
-        if (level !== s.logging.level) p.logging = { level };
+        if (logChanged) p.logging = { level, format };
         if (debug !== s.debug.enabled) p.debug = { enabled: debug };
         return p;
       }}
     >
+      <Field label="Public address" hint="How you open Atlantis, if through a reverse proxy. With an https:// address, sign-ins over HTTPS get a Secure cookie; the proxy must send X-Forwarded-Proto: https.">
+        <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://atlantis.example.com" autoComplete="off" />
+      </Field>
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Public address" hint="How you open Atlantis, if through a reverse proxy. With an https:// address, sign-ins over HTTPS get a Secure cookie; the proxy must send X-Forwarded-Proto: https.">
-          <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://atlantis.example.com" autoComplete="off" />
-        </Field>
         <Field label="Log level">
           <select className={`${selectClass} w-full`} value={level} onChange={(e) => setLevel(e.target.value as typeof level)}>
             <option value="error">Errors only</option>
             <option value="warn">Warnings</option>
             <option value="info">Normal</option>
             <option value="debug">Debug (verbose)</option>
+          </select>
+        </Field>
+        <Field label="Log format" hint="Logs go to the console (docker logs).">
+          <select className={`${selectClass} w-full`} value={format} onChange={(e) => setFormat(e.target.value as typeof format)}>
+            <option value="json">JSON (for log collectors)</option>
+            <option value="text">Plain text</option>
           </select>
         </Field>
       </div>
@@ -316,8 +285,7 @@ export function AdvancedPanel({ s }: { s: Settings }) {
           ))}
         </dl>
         <p className="mt-1 text-xs text-drift">
-          To change these, start Atlantis with ATLANTIS_SERVER_LISTEN, ATLANTIS_STORE_PATH, ATLANTIS_SECRET_KEY or ATLANTIS_LOG_FORMAT. Back up the database and its key
-          together.
+          The address and database are chosen when Atlantis starts (--server-listen and --store-path). Back up the database and its key file together.
         </p>
       </div>
     </SettingsPanel>
