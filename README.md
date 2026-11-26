@@ -41,7 +41,7 @@ It is a single Go binary with the web UI built in. It runs on a Raspberry Pi, a 
 - **Wi-Fi.** Every band and network with its name, security and state. Turn the guest and IoT networks on or off and change their name and password (and the guest network's security). Change the main network's name and password on all bands, after typing `CHANGE` to confirm. Only changes that have been tested on a real Deco are offered (see [Wi-Fi changes](#wi-fi-changes)).
 - **Configured in the browser.** No configuration file or environment variables are needed: start the container or binary, then set everything in Settings. The key that encrypts stored passwords is created on first start.
 - **Refresh times you set.** Choose how often devices and the mesh are checked in Settings; the change applies at once.
-- **Events.** A timeline of devices joining, coming and going, Decos going offline, internet outages, public IP changes and firmware updates.
+- **Events.** A timeline of devices joining, coming and going, Decos going offline, internet outages, public IP changes, firmware updates and a new Deco SSH key.
 - **Notifications** through [Shoutrrr](https://containrrr.dev/shoutrrr/) (Telegram, Discord, Slack, ntfy, email and more) or WhatsApp through [OpenWA](https://github.com/open-wa/wa-automate-nodejs). Each channel picks which events it sends and can be limited to watched devices. Messages use templates, and there are quiet hours.
 - **Prometheus metrics** for Decos, clients, the internet connection and Atlantis's own polling.
 - **History in SQLite**, with raw samples rolled up hourly. You choose how long both are kept.
@@ -204,7 +204,7 @@ Everything is set in **Settings**, and saved in the database:
 | Notification timing | Time zone (default UTC) and quiet hours |
 | History | How long detailed samples (default 7 days) and hourly history (default 90 days) are kept |
 | Prometheus metrics | On or off (default on, at `/metrics`), per-device series (default watched devices), bearer token |
-| Advanced | Public address (secure cookies behind an HTTPS proxy), log level and format, debug endpoint |
+| Advanced | Public address (secure cookies behind an HTTPS proxy), log level and format, trusting a new Deco SSH key automatically (on by default), debug endpoint |
 
 Changes apply at once; nothing needs a restart. Secrets (the Deco password, the metrics token, channel credentials) are encrypted and never shown again.
 
@@ -231,7 +231,7 @@ Earlier versions read a YAML file, more `ATLANTIS_*` variables and more flags (`
 - **The status line** at the top of every page shows the connection to the Deco and its action:
   - **Release for the app:** sign Atlantis out for 10 minutes so you can use the Deco app.
   - **Resume now:** sign back in early, after a release, a pause, or another admin taking the session.
-  - **Trust the new key:** shown when the Deco presents a different key than before. That is expected after a firmware update or reset; otherwise, don't trust it.
+  - **Trust the new key:** shown when the Deco presents a different key than before and **Settings → Advanced → Trust a new Deco SSH key automatically** is off. That is expected after a firmware update or reset; otherwise, don't trust it. With the switch on (the default), Atlantis trusts the new key by itself, logs a warning and records a **The Deco's SSH key changed** event (with the old and new fingerprints) that channels can send.
 - **Settings** also has the same session controls, plus **Release for an hour** and **Pause polling**, the notification channels, and every other setting (see [Configuration](#configuration)).
 - **Renaming a device** (on its detail page, **Name and tags**) renames it on the Deco first, then in Atlantis. If the Deco refuses, for example because it doesn't list a device that has been away for a while, nothing is saved and the page says why. Clearing the name clears it in Atlantis only; the Deco keeps its name.
 - **Watching a device** (on its detail page) can limit notifications to the devices you care about. With per-device metrics set to watched devices, they also get their own metrics.
@@ -351,7 +351,7 @@ Run any command with `--help` for all its flags.
 
 - The Deco password, notification credentials and the metrics token are encrypted at rest with AES-256-GCM. The key is `secret.key` in the data directory (created on first start, readable only by Atlantis's user), or `ATLANTIS_SECRET_KEY` if set. Secrets are never returned by the API and never logged.
 - With the key file, a copy of the data directory alone can decrypt the stored passwords. To keep them apart, set `ATLANTIS_SECRET_KEY` instead (from `atlantis keygen`, or the contents of `secret.key`) and keep it outside the volume.
-- The Deco's SSH host key (or HTTPS certificate with `luci`) is pinned on first use. A different key stops Atlantis until you trust it from the UI.
+- The Deco's SSH host key (or HTTPS certificate with `luci`) is pinned on first use. A different SSH key is trusted automatically and recorded as an event, because firmware updates change it; that also means a device on your LAN pretending to be the Deco would be trusted and get the TP-Link ID password. Turn off **Settings → Advanced → Trust a new Deco SSH key automatically** to have a different key stop Atlantis until you trust it from the UI. A different HTTPS certificate always stops it.
 - Connecting a Deco signs in once to check the password and never retries a rejected one. After five rejected passwords in 15 minutes, Atlantis waits so the TP-Link ID isn't locked.
 - Wi-Fi changes are limited to the ones tested on a real Deco, and every change and connection change is written to the audit log (without passwords).
 - Atlantis's own account uses a bcrypt password, an HttpOnly SameSite=Strict session cookie, CSRF tokens on changes, and a lockout after repeated failed sign-ins.
@@ -366,7 +366,7 @@ Run any command with `--help` for all its flags.
 - **"The Deco rejected the password".** Atlantis stops trying, to avoid locking the account. Enter the right TP-Link ID password in **Settings → Deco → Change connection** (or on the Reconnect page).
 - **"This Deco only accepts TP-Link's newer encrypted (TLS) connection".** The Deco's model or firmware doesn't accept the SSH connection Atlantis uses. See [Supported Decos](#supported-decos).
 - **"This is a satellite Deco".** Enter the address of the main Deco, the one connected to the modem.
-- **"The Deco's security key changed".** This is expected after a firmware update or factory reset. If neither happened, don't trust the new key: something else may be answering at the Deco's address.
+- **"The Deco's security key changed".** Shown only when automatic trust is off (or for the HTTPS certificate with `luci`). This is expected after a firmware update or factory reset. If neither happened, don't trust the new key: something else may be answering at the Deco's address.
 - **CPU and memory show "—".** Some models, such as the M5, don't report them.
 - **Swagger UI is blank.** `/api/docs` loads Swagger UI from unpkg.com, so the browser needs internet access. The spec itself is at `/api/openapi.yaml`.
 
