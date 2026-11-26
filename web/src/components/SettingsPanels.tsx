@@ -230,8 +230,10 @@ export function AdvancedPanel({ s }: { s: Settings }) {
   const [level, setLevel] = useState(s.logging.level);
   const [format, setFormat] = useState(s.logging.format);
   const [debug, setDebug] = useState(s.debug.enabled);
+  const [trustKey, setTrustKey] = useState(s.security.trust_new_host_key);
   const logChanged = level !== s.logging.level || format !== s.logging.format;
-  const changed = baseUrl !== s.access.base_url || logChanged || debug !== s.debug.enabled;
+  const changed =
+    baseUrl !== s.access.base_url || logChanged || debug !== s.debug.enabled || trustKey !== s.security.trust_new_host_key;
   const facts: [string, string][] = [
     ["Listening on", s.startup.listen],
     ["Database", s.startup.data_path],
@@ -248,6 +250,7 @@ export function AdvancedPanel({ s }: { s: Settings }) {
         if (baseUrl !== s.access.base_url) p.access = { base_url: baseUrl.trim() };
         if (logChanged) p.logging = { level, format };
         if (debug !== s.debug.enabled) p.debug = { enabled: debug };
+        if (trustKey !== s.security.trust_new_host_key) p.security = { trust_new_host_key: trustKey };
         return p;
       }}
     >
@@ -269,6 +272,14 @@ export function AdvancedPanel({ s }: { s: Settings }) {
             <option value="text">Plain text</option>
           </select>
         </Field>
+      </div>
+      <div>
+        <LabeledSwitch checked={trustKey} onChange={setTrustKey} label="Trust a new Deco SSH key automatically (after a firmware update)" />
+        <p className="mt-1 text-xs text-drift">
+          {trustKey
+            ? "A device on your network pretending to be the Deco would also be trusted. Each change is listed under Events."
+            : "When the key changes, Atlantis stops until you accept the new key."}
+        </p>
       </div>
       <div>
         <LabeledSwitch checked={debug} onChange={setDebug} label="Debug endpoint (raw Deco replies, redacted)" />

@@ -111,13 +111,15 @@ export function eventText(e: DecoEvent, name: (subject: string) => string): stri
       return `Public IP changed from ${String(p.from)} to ${String(p.to)}`;
     case "firmware.changed":
       return `Deco ${who} updated from ${String(p.from)} to ${String(p.to)}`;
+    case "deco.host_key_changed":
+      return `The Deco's SSH key changed to ${String(p.to)} (trusted automatically)`;
     default:
       return `${e.type} ${who}`;
   }
 }
 
 export const eventTone = (t: string): "ok" | "warn" | "bad" =>
-  t.endsWith(".offline") || t === "wan.down" ? "bad" : t === "client.joined" || t === "firmware.changed" ? "warn" : "ok";
+  t.endsWith(".offline") || t === "wan.down" ? "bad" : t === "client.joined" || t === "firmware.changed" || t === "deco.host_key_changed" ? "warn" : "ok";
 
 /** "168h0m0s" (a Go duration) → "7 days"; "5m0s" → "5 minutes". */
 export function goDuration(d: string): string {
