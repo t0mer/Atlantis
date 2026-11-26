@@ -225,7 +225,7 @@ Earlier versions read a YAML file, more `ATLANTIS_*` variables and more flags (`
 
 ## Using Atlantis
 
-- **First run:** create the admin account (the password needs at least 10 characters). Then enter the main Deco's IP address, your TP-Link ID email and its password, and choose **Connect**. Atlantis signs in and reads the Decos before it saves anything. A wrong password is not retried, so the account isn't locked; after five rejected passwords in 15 minutes, Atlantis waits before it tries again. The first time, Atlantis trusts the Deco's SSH key and remembers it.
+- **First run:** create the admin account (the password needs at least 6 characters). Then enter the main Deco's IP address, your TP-Link ID email and its password, and choose **Connect**. Atlantis signs in and reads the Decos before it saves anything. A wrong password is not retried, so the account isn't locked; after five rejected passwords in 15 minutes, Atlantis waits before it tries again. The first time, Atlantis trusts the Deco's SSH key and remembers it.
 - **Settings → Deco** shows the connected Deco and its security key. **Change connection** updates the address, account or password and keeps the history. **Remove** (type `REMOVE` to confirm) signs out and deletes the Deco's devices, history and events; notification channels and your account stay.
 - **Settings → Refresh** sets how often devices and the mesh are checked, and after how many missed checks a device counts as offline.
 - **The status line** at the top of every page shows the connection to the Deco and its action:
