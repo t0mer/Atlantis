@@ -9,10 +9,7 @@ services:
       # (secret.key, created on first start). Back them up together.
       - atlantis-data:/data
     restart: unless-stopped
-    # Everything else is set in the web UI (Settings). Optional overrides:
-    # environment:
-    #   ATLANTIS_SECRET_KEY: ${ATLANTIS_SECRET_KEY}   # instead of /data/secret.key
-    #   ATLANTIS_LOG_FORMAT: text
+    # Everything else is set in the web UI (Settings).
 
 volumes:
   atlantis-data:

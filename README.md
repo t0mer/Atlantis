@@ -200,45 +200,28 @@ Everything is set in **Settings**, and saved in the database:
 |---|---|
 | Deco | The main Deco's address, account and password |
 | Refresh | How often devices and the mesh are checked; when a device counts as offline |
-| Notifications | Channels (Shoutrrr, WhatsApp through OpenWA) and their events |
-| Notification timing | Time zone and quiet hours |
-| WhatsApp (OpenWA) defaults | Server URL, API key and chat that WhatsApp channels fall back to |
-| History | How long detailed samples and hourly history are kept |
-| Prometheus metrics | On or off, path, per-device series, bearer token |
-| Advanced | Public address (secure cookies behind an HTTPS proxy), log level, debug endpoint |
+| Notifications | Channels (Shoutrrr, or WhatsApp through OpenWA with its own address and chat) and their events |
+| Notification timing | Time zone (default UTC) and quiet hours |
+| History | How long detailed samples (default 7 days) and hourly history (default 90 days) are kept |
+| Prometheus metrics | On or off (default on, at `/metrics`), per-device series (default watched devices), bearer token |
+| Advanced | Public address (secure cookies behind an HTTPS proxy), log level and format, debug endpoint |
 
-Changes apply at once; nothing needs a restart. Secrets (the Deco password, the metrics token, the OpenWA key, channel credentials) are encrypted and never shown again.
+Changes apply at once; nothing needs a restart. Secrets (the Deco password, the metrics token, channel credentials) are encrypted and never shown again.
 
 ### Set at startup
 
-A few things are needed before the web UI runs. Each has a working default, and can be set with a flag, an environment variable, or a YAML file (`--config atlantis.yaml` or `ATLANTIS_CONFIG`). Settings shows them read-only under **Advanced**.
+There is no configuration file. Only two things are chosen before the web UI runs, and both are optional. Settings shows them read-only under **Advanced**.
 
-| Key | Environment variable | Flag | Default | Description |
-|---|---|---|---|---|
-| `server.listen` | `ATLANTIS_SERVER_LISTEN` | `--server-listen` | `:8080` | Address and port to listen on. |
-| `store.path` | `ATLANTIS_STORE_PATH` | `--store-path` | `atlantis.db` | The database file, relative to the working directory (`/data` in the image). The key file is kept next to it. If there is no `atlantis.db` in the working directory but `/data/atlantis.db` exists (the old default), that one is used. |
-| `secret_key` | `ATLANTIS_SECRET_KEY` | | `secret.key` next to the database | Base64 of 32 bytes, from `atlantis keygen`. Set it to keep the key outside the data directory; it then wins over the key file. Atlantis refuses to start with a key that doesn't open the passwords already stored. |
-| `log.format` | `ATLANTIS_LOG_FORMAT` | | `json` | `json` or `text`. |
+| Flag | Environment variable | Default | Description |
+|---|---|---|---|
+| `--server-listen` | `ATLANTIS_SERVER_LISTEN` | `:8080` | Address and port to listen on. |
+| `--store-path` | `ATLANTIS_STORE_PATH` | `atlantis.db` | The database file, relative to the working directory (`/data` in the image). The key file is kept next to it. If there is no `atlantis.db` in the working directory but `/data/atlantis.db` exists (the old default), that one is used. |
 
-Precedence: flag, then environment, then YAML, then the default.
+A flag wins over its environment variable. The image's health check (`atlantis healthcheck`) reads only `ATLANTIS_SERVER_LISTEN`, so in Docker change the port with that variable rather than the flag.
 
-### Defaults for the Settings page
+`ATLANTIS_SECRET_KEY` (base64 of 32 bytes, from `atlantis keygen`) is for keeping the encryption key outside the data directory; when it is set, it is used instead of `secret.key`. Atlantis refuses to start with a key that doesn't open the passwords already stored.
 
-Every setting in the Settings page can also be given in the environment or YAML, as a starting value for new installs. A value saved in Settings always wins over it.
-
-| Key | Environment variable | Default |
-|---|---|---|
-| `poll.fast`, `poll.slow`, `poll.offline_after_misses` | `ATLANTIS_POLL_FAST`, `_SLOW`, `_OFFLINE_AFTER_MISSES` | `30s`, `5m`, `2` |
-| `store.raw_retention`, `store.rollup_retention` | `ATLANTIS_STORE_RAW_RETENTION`, `_ROLLUP_RETENTION` | `168h`, `2160h` |
-| `metrics.enabled`, `.path`, `.per_client`, `.token` | `ATLANTIS_METRICS_ENABLED`, `_PATH`, `_PER_CLIENT`, `_TOKEN` | `true`, `/metrics`, `watched`, none |
-| `notify.quiet_hours`, `notify.timezone` | `ATLANTIS_NOTIFY_QUIET_HOURS`, `_TIMEZONE` | none, `UTC` |
-| `openwa.url`, `.api_key`, `.default_chat` | `ATLANTIS_OPENWA_URL`, `_API_KEY`, `_DEFAULT_CHAT` | none |
-| `server.base_url` | `ATLANTIS_SERVER_BASE_URL` | none |
-| `log.level` | `ATLANTIS_LOG_LEVEL` | `info` |
-| `debug.enabled` | `ATLANTIS_DEBUG_ENABLED` | `false` |
-| `deco.host`, `.email`, `.password`, `.transport`, `.port`, `.host_key`, `.tls_pin` | `ATLANTIS_DECO_HOST`, ... | none; used only while no Deco is stored |
-
-Durations use Go's format: `30s`, `5m`, `168h`.
+Earlier versions read a YAML file, more `ATLANTIS_*` variables and more flags (`--config`, `--deco-*`, `--log-level`). Those are no longer read: the flags are still accepted, Atlantis logs a warning naming any of them that are still set, and the settings are made in the UI. The one exception is the old OpenWA defaults: on the first start, Atlantis copies those saved in Settings or set in `ATLANTIS_OPENWA_*` into any WhatsApp channel that left those fields empty. Defaults kept only in the old YAML file are not read; enter them on the channel.
 
 ## Using Atlantis
 
@@ -275,7 +258,7 @@ Add channels under **Settings → Notifications**. Each channel has:
 
 - **A service.**
   - **Shoutrrr:** one URL, such as `telegram://token@telegram?chats=@channel`, `discord://token@id`, `ntfy://ntfy.sh/topic` or `smtp://...`. See the [Shoutrrr services](https://containrrr.dev/shoutrrr/latest/services/overview/).
-  - **WhatsApp (OpenWA):** the server URL, API key and chat. Empty fields fall back to the `openwa.*` settings.
+  - **WhatsApp (OpenWA):** the OpenWA address and the chat to send to (both required), and the API key if your OpenWA server uses one.
 - **The events to send:**
   - a new device joining for the first time;
   - a device coming online or going offline;
@@ -305,13 +288,13 @@ Channel credentials are encrypted in the database and are never sent back to the
 | `deco_poll_errors_total` | `loop`, `reason` | Failed polls. |
 | `deco_session_logins_total` | `result` | Sign-ins to the Deco. |
 
-The per-device series follow `metrics.per_client`. Go runtime and process metrics are included too.
+The per-device series follow **Per-device series** in Settings. Go runtime and process metrics are included too.
 
 ```yaml
 scrape_configs:
   - job_name: atlantis
     authorization:
-      credentials: change-me   # metrics.token
+      credentials: change-me   # the bearer token from Settings
     static_configs:
       - targets: ["atlantis:8080"]
 ```
@@ -351,7 +334,7 @@ The UI uses the REST API under `/api/v1`. The OpenAPI spec is at `/api/openapi.y
 
 | Command | Purpose |
 |---|---|
-| `atlantis serve [--config FILE]` | Run the server. |
+| `atlantis serve [--server-listen ADDR] [--store-path FILE]` | Run the server. |
 | `atlantis keygen` | Print a new secret key. |
 | `atlantis healthcheck [--url URL]` | Exit 0 when the local server answers `/health` (used by the Docker health check). |
 | `atlantis version` | Print the version. |
@@ -366,7 +349,7 @@ Run any command with `--help` for all its flags.
 
 ## Security
 
-- The Deco password, notification credentials, the metrics token and the OpenWA key are encrypted at rest with AES-256-GCM. The key is `secret.key` in the data directory (created on first start, readable only by Atlantis's user), or `ATLANTIS_SECRET_KEY` if set. Secrets are never returned by the API and never logged.
+- The Deco password, notification credentials and the metrics token are encrypted at rest with AES-256-GCM. The key is `secret.key` in the data directory (created on first start, readable only by Atlantis's user), or `ATLANTIS_SECRET_KEY` if set. Secrets are never returned by the API and never logged.
 - With the key file, a copy of the data directory alone can decrypt the stored passwords. To keep them apart, set `ATLANTIS_SECRET_KEY` instead (from `atlantis keygen`, or the contents of `secret.key`) and keep it outside the volume.
 - The Deco's SSH host key (or HTTPS certificate with `luci`) is pinned on first use. A different key stops Atlantis until you trust it from the UI.
 - Connecting a Deco signs in once to check the password and never retries a rejected one. After five rejected passwords in 15 minutes, Atlantis waits so the TP-Link ID isn't locked.
