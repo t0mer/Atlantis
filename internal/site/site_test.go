@@ -270,3 +270,128 @@ func TestFailedChangeFromACancelledRequestRestarts(t *testing.T) {
 		t.Fatal("still marked as changing")
 	}
 }
+
+// keyClient checks the SSH host key the way the real dial does: the pin
+// first, then the site's decision on a changed key.
+type keyClient struct {
+	*fakeClient
+	keys *HostKeys
+	key  func() string // what the Deco presents
+}
+
+func (k keyClient) Login(ctx context.Context) error {
+	presented := k.key()
+	pin, acceptNew := k.keys.Current()
+	switch {
+	case pin == "":
+		k.keys.Seen(presented)
+		if !acceptNew {
+			return deco.ErrCertUnknown
+		}
+	case pin != presented && !k.keys.Changed(pin, presented):
+		return deco.ErrCertChanged
+	}
+	return k.fakeClient.Login(ctx)
+}
+
+func (k keyClient) Devices(ctx context.Context) ([]deco.Device, error) {
+	if err := k.Login(ctx); err != nil { // the real client dials lazily
+		return nil, err
+	}
+	return k.fakeClient.Devices(ctx)
+}
+
+type notified struct {
+	mu  sync.Mutex
+	evs []store.Event
+}
+
+func (n *notified) Notify(e store.Event, _ string, _ bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.evs = append(n.evs, e)
+}
+
+func (n *notified) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.evs)
+}
+
+func TestChangedHostKey(t *testing.T) {
+	for _, trust := range []bool{true, false} {
+		t.Run(map[bool]string{true: "trusted", false: "manual"}[trust], func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			var mu sync.Mutex
+			presented := "SHA256:old"
+			key := func() string { mu.Lock(); defer mu.Unlock(); return presented }
+			nt := &notified{}
+			deps := h.s.d
+			deps.Notify = nt
+			deps.TrustNewHostKey = func() bool { return trust }
+			deps.Build = func(_ context.Context, _ store.Network, _ string, keys *HostKeys, _ func(string), _ *slog.Logger) (deco.Client, *Discovery, error) {
+				return keyClient{&fakeClient{}, keys, key}, h.disc, nil
+			}
+			h.s.d = deps
+			if _, err := h.s.Connect(ctx, conn); err != nil {
+				t.Fatal(err)
+			}
+			if n, _, _ := h.st.GetNetwork(ctx); n.HostKey != "SHA256:old" {
+				t.Fatalf("first key pinned: %q", n.HostKey)
+			}
+			h.s.Close(ctx)
+
+			// A firmware update changes the key; Atlantis starts again.
+			mu.Lock()
+			presented = "SHA256:new"
+			mu.Unlock()
+			s2 := New(ctx, deps)
+			t.Cleanup(func() { s2.Close(context.Background()) })
+			if err := s2.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for time.Now().Before(deadline) {
+				st := s2.Current().Session.Status().State
+				if (trust && st == "connected") || (!trust && st == "cert_changed") {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			n, _, _ := h.st.GetNetwork(ctx)
+			evs, _ := h.st.Events(ctx, n.ID, store.EventFilter{})
+			if !trust {
+				if st := s2.Current().Session.Status().State; st != "cert_changed" || n.HostKey != "SHA256:old" || len(evs) != 0 || nt.count() != 0 {
+					t.Fatalf("manual: state %s, pin %q, %d events, %d notified", st, n.HostKey, len(evs), nt.count())
+				}
+				return
+			}
+			if st := s2.Current().Session.Status().State; st != "connected" || n.HostKey != "SHA256:new" {
+				t.Fatalf("trusted: state %s, pin %q", st, n.HostKey)
+			}
+			if len(evs) != 1 || evs[0].Type != "deco.host_key_changed" || evs[0].Subject != conn.Host ||
+				string(evs[0].Payload) != `{"from":"SHA256:old","to":"SHA256:new"}` || nt.count() != 1 {
+				t.Fatalf("event: %+v, notified %d", evs, nt.count())
+			}
+
+			// Changing the connection settings trusts a new key the same way.
+			s2.Close(ctx)
+			mu.Lock()
+			presented = "SHA256:newer"
+			mu.Unlock()
+			s3 := New(ctx, deps)
+			t.Cleanup(func() { s3.Close(context.Background()) })
+			c := conn
+			c.Password = ""
+			if _, err := s3.Connect(ctx, c); err != nil {
+				t.Fatal(err)
+			}
+			n, _, _ = h.st.GetNetwork(ctx)
+			evs, _ = h.st.Events(ctx, n.ID, store.EventFilter{})
+			if n.HostKey != "SHA256:newer" || len(evs) != 2 || nt.count() != 2 {
+				t.Fatalf("connect: pin %q, %d events, %d notified", n.HostKey, len(evs), nt.count())
+			}
+		})
+	}
+}

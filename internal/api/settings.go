@@ -40,6 +40,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		"access":        map[string]any{"base_url": v.Access.BaseURL},
 		"logging":       map[string]any{"level": v.Logging.Level, "format": v.Logging.Format},
 		"debug":         map[string]any{"enabled": v.Debug.Enabled},
+		"security":      map[string]any{"trust_new_host_key": v.Security.TrustNewHostKey},
 		"startup":       s.Startup,
 		"version":       s.Version,
 	})
@@ -65,6 +66,9 @@ type settingsBody struct {
 	Access        *prefs.AccessPrefs  `json:"access"`
 	Logging       *prefs.LoggingPrefs `json:"logging"`
 	Debug         *prefs.DebugPrefs   `json:"debug"`
+	Security      *struct {
+		TrustNewHostKey *bool `json:"trust_new_host_key"` // absent = keep
+	} `json:"security"`
 }
 
 // putSettings changes any of the sections. Everything is checked before
@@ -105,6 +109,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		pt.Metrics = &prefs.MetricsPatch{Enabled: m.Enabled, Path: strings.TrimSpace(m.Path), PerClient: m.PerClient, Token: m.Token}
 	}
 	pt.Access, pt.Logging, pt.Debug = b.Access, b.Logging, b.Debug
+	if b.Security != nil && b.Security.TrustNewHostKey != nil {
+		pt.Security = &prefs.SecurityPrefs{TrustNewHostKey: *b.Security.TrustNewHostKey}
+	}
 	if n := b.Notifications; n != nil {
 		pt.Notify = &prefs.NotifyPrefs{QuietHours: strings.TrimSpace(n.QuietHours), Timezone: strings.TrimSpace(n.Timezone)}
 	}

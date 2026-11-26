@@ -92,6 +92,35 @@ func TestHostKeyPinMismatch(t *testing.T) {
 	}
 }
 
+func TestChangedHostKeyHook(t *testing.T) {
+	const old = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	f := newFake(t, "u", "p")
+	o := opts(f, "u", "p")
+	o.HostKeyPin = old
+
+	// Declined: fails closed before the password is sent.
+	var asked int
+	o.OnHostKeyChanged = func(string, string) bool { asked++; return false }
+	if _, err := Dial(context.Background(), o); !errors.Is(err, ErrHostKeyChanged) {
+		t.Fatalf("want ErrHostKeyChanged, got %v", err)
+	}
+	if asked != 1 || f.Attempts() != 0 {
+		t.Fatalf("asked %d, password attempts %d", asked, f.Attempts())
+	}
+
+	// Trusted: connects, and the hook sees both fingerprints.
+	var pinned, seen string
+	o.OnHostKeyChanged = func(p, s string) bool { pinned, seen = p, s; return true }
+	conn, err := Dial(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	if pinned != old || seen != Fingerprint(f.Key.PublicKey()) {
+		t.Fatalf("hook got %q → %q", pinned, seen)
+	}
+}
+
 func TestUsername(t *testing.T) {
 	if got := Username(" Owner@Example.com ", false, false); got != "owner@example.com" {
 		t.Fatal(got)

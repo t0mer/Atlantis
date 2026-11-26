@@ -197,6 +197,9 @@ test("settings are saved in the UI and kept", async ({ page }) => {
 
   const advanced = page.locator("section", { has: page.getByRole("heading", { name: "Advanced" }) });
   await advanced.getByLabel("Log format").selectOption("text");
+  const trustKey = advanced.getByRole("switch", { name: /Trust a new Deco SSH key/ });
+  await expect(trustKey).toBeChecked(); // on by default
+  await trustKey.click();
   await advanced.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Advanced settings saved")).toBeVisible();
 
@@ -204,6 +207,7 @@ test("settings are saved in the UI and kept", async ({ page }) => {
   await expect(history.getByLabel("Keep detailed samples for")).toHaveValue("72");
   await expect(timing.getByLabel("From")).toHaveValue("22:30");
   await expect(advanced.getByLabel("Log format")).toHaveValue("text");
+  await expect(trustKey).not.toBeChecked();
   await expect(page.getByRole("heading", { name: /OpenWA/ })).toHaveCount(0);
 });
 

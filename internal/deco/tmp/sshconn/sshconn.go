@@ -54,6 +54,10 @@ type Options struct {
 	HostKeyPin string
 	AcceptNew  bool
 	OnHostKey  func(fingerprint string)
+	// OnHostKeyChanged is asked when the key differs from HostKeyPin. It
+	// returns true to trust the new key; nil or false fails with
+	// ErrHostKeyChanged. It runs before any password is sent.
+	OnHostKeyChanged func(pinned, seen string) bool
 	// TPSBanner sends the app's TPS banner (TDP banner_type 1).
 	TPSBanner bool
 	Timeout   time.Duration // connect + handshake; default 15s
@@ -144,6 +148,9 @@ func Dial(ctx context.Context, o Options) (*Conn, error) {
 			return nil
 		}
 		if seen != o.HostKeyPin {
+			if o.OnHostKeyChanged != nil && o.OnHostKeyChanged(o.HostKeyPin, seen) {
+				return nil
+			}
 			return ErrHostKeyChanged
 		}
 		return nil

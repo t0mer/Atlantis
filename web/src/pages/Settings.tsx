@@ -42,6 +42,7 @@ const eventNames: Record<EventType, string> = {
   "wan.down": "Internet goes down",
   "wan.ip_changed": "The public IP changes",
   "firmware.changed": "A Deco's firmware changes",
+  "deco.host_key_changed": "The Deco's SSH key changes",
 };
 
 function SessionPanel() {

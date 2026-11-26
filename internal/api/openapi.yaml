@@ -147,7 +147,7 @@ components:
         ts: { type: string, format: date-time }
         type:
           type: string
-          enum: [client.joined, client.online, client.offline, node.online, node.offline, wan.up, wan.down, wan.ip_changed, firmware.changed]
+          enum: [client.joined, client.online, client.offline, node.online, node.offline, wan.up, wan.down, wan.ip_changed, firmware.changed, deco.host_key_changed]
         subject: { type: string }
         payload: { type: object }
     ChannelConfig:
@@ -339,6 +339,7 @@ paths:
                   access: { type: object, properties: { base_url: { type: string } } }
                   logging: { type: object, properties: { level: { type: string }, format: { type: string } } }
                   debug: { type: object, properties: { enabled: { type: boolean } } }
+                  security: { type: object, properties: { trust_new_host_key: { type: boolean } } }
                   startup: { type: object, properties: { listen: { type: string }, data_path: { type: string }, key_source: { type: string } } }
     put:
       summary: Change any sections; they are saved and apply at once. All sections are checked before any is saved.
@@ -376,6 +377,7 @@ paths:
                 access: { type: object, properties: { base_url: { type: string, description: "Public URL; https:// marks the session cookie Secure" } } }
                 logging: { type: object, description: An omitted field keeps its value, properties: { level: { type: string, enum: [debug, info, warn, error] }, format: { type: string, enum: [json, text] } } }
                 debug: { type: object, properties: { enabled: { type: boolean, description: Enables GET /api/v1/debug/raw } } }
+                security: { type: object, description: An omitted field keeps its value, properties: { trust_new_host_key: { type: boolean, description: "Trust a changed Deco SSH key (as after a firmware update) and record a deco.host_key_changed event, instead of stopping until it is accepted. Default true." } } }
       responses: { "200": { description: The settings now in effect }, "400": { description: Invalid; nothing was saved } }
   /api/v1/channels:
     get:

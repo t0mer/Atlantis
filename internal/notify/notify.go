@@ -50,16 +50,17 @@ type Message struct {
 }
 
 var defaultTemplates = map[string]string{
-	"client.joined":    `🆕 New device on {{.Site}}: {{.Name}}{{with .Payload.ip}} ({{.}}){{end}}`,
-	"client.online":    `🟢 {{.Name}} is online on {{.Site}}`,
-	"client.offline":   `⚪ {{.Name}} went offline on {{.Site}}`,
-	"node.online":      `✅ Deco {{.Name}} is back online`,
-	"node.offline":     `🔴 Deco {{.Name}} is offline`,
-	"wan.up":           `🌐 Internet is back on {{.Site}}`,
-	"wan.down":         `🚫 Internet is down on {{.Site}}{{with .Payload.error}} ({{.}}){{end}}`,
-	"wan.ip_changed":   `🔁 WAN IP changed on {{.Site}}: {{.Payload.from}} → {{.Payload.to}}`,
-	"firmware.changed": `⬆️ Deco {{.Name}} firmware {{.Payload.from}} → {{.Payload.to}}`,
-	"test":             `✅ Atlantis test message for {{.Site}}`,
+	"client.joined":         `🆕 New device on {{.Site}}: {{.Name}}{{with .Payload.ip}} ({{.}}){{end}}`,
+	"client.online":         `🟢 {{.Name}} is online on {{.Site}}`,
+	"client.offline":        `⚪ {{.Name}} went offline on {{.Site}}`,
+	"node.online":           `✅ Deco {{.Name}} is back online`,
+	"node.offline":          `🔴 Deco {{.Name}} is offline`,
+	"wan.up":                `🌐 Internet is back on {{.Site}}`,
+	"wan.down":              `🚫 Internet is down on {{.Site}}{{with .Payload.error}} ({{.}}){{end}}`,
+	"wan.ip_changed":        `🔁 WAN IP changed on {{.Site}}: {{.Payload.from}} → {{.Payload.to}}`,
+	"firmware.changed":      `⬆️ Deco {{.Name}} firmware {{.Payload.from}} → {{.Payload.to}}`,
+	"deco.host_key_changed": `🔑 Deco {{.Name}} has a new SSH key ({{.Payload.to}}); trusted automatically`,
+	"test":                  `✅ Atlantis test message for {{.Site}}`,
 }
 
 // Render renders tmpl (or the default for m.Type) for m.

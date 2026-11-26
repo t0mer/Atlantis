@@ -131,9 +131,12 @@ func TestSettingsSectionsApplyAtOnce(t *testing.T) {
 	code, m, _ := e.do(t, "PUT", "/api/v1/settings", `{"metrics":{"enabled":true,"path":"/prom","per_client":"all","token":"scrape-me"},
 		"debug":{"enabled":false},"logging":{"level":"debug","format":"text"},"history":{"raw_retention":"48h","rollup_retention":"720h"},
 		"notifications":{"quiet_hours":"23:00-07:00","timezone":"Asia/Jerusalem"},
-		"access":{"base_url":"https://atlantis.lan/"}}`, true)
+		"access":{"base_url":"https://atlantis.lan/"},"security":{"trust_new_host_key":false}}`, true)
 	if code != 200 {
 		t.Fatalf("%d %v", code, m)
+	}
+	if sec := m["security"].(map[string]any); sec["trust_new_host_key"] != false {
+		t.Fatalf("%v", sec)
 	}
 	if mm := m["metrics"].(map[string]any); mm["path"] != "/prom" || mm["token_set"] != true || mm["token"] != nil {
 		t.Fatalf("%v", mm)

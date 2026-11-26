@@ -168,7 +168,8 @@ export type EventType =
   | "wan.up"
   | "wan.down"
   | "wan.ip_changed"
-  | "firmware.changed";
+  | "firmware.changed"
+  | "deco.host_key_changed";
 
 export interface DecoEvent {
   id: number;
@@ -217,6 +218,7 @@ export interface Settings {
   access: { base_url: string };
   logging: { level: "debug" | "info" | "warn" | "error"; format: "json" | "text" };
   debug: { enabled: boolean };
+  security: { trust_new_host_key: boolean };
   startup: { listen: string; data_path: string; key_source: string };
   version: string;
 }
@@ -230,6 +232,7 @@ export interface SettingsPatch {
   access?: { base_url: string };
   logging?: { level: string; format: string };
   debug?: { enabled: boolean };
+  security?: { trust_new_host_key: boolean };
 }
 
 export interface AuthStatus {
